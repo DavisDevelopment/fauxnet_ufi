@@ -5,6 +5,8 @@ from time import sleep
 from nn.common import *
 from datatools import renormalize
    
+from nn.namlp import NacMlp
+
 #* (symbols, timesteps, features)
 nK, nT, nC, nM = 10, 90, 5, 128
 
@@ -34,27 +36,25 @@ print(nn(X))
 # us_y = renormalize
 
 # encoder = Encoder(nK, nT, nC)
-opt = torch.optim.RMSprop(nn.parameters(), lr=0.00002)
+opt = torch.optim.RMSprop(nn.parameters(), lr=0.0002)
 crit = torch.nn.MSELoss()
 
-epochs = 20
+epochs = 30
 us_y = torch.zeros_like(y)
 for k in range(nK):
    us_y[k] = renormalize(y[k], (0.0, 1.0), move_ranges[k])
 
 for e in range(epochs):
    yhat = nn(X).squeeze()
-   # loss = crit(y, yhat)
-   
-   us_yhat = Variable(torch.zeros_like(yhat, requires_grad=True))
-   for k in range(nK):
-      us_yhat[k] = renormalize(yhat[k], (0.0, 1.0), move_ranges[k])
-   loss = crit(us_y, us_yhat)
+   loss = crit(y, yhat)
    loss.backward()
-   
    opt.step()
    
-   print(y[-1].numpy(), yhat[-1].detach().numpy())
    print(f'epoch {e}: {loss}')
-# encoder = script(encoder.eval())
+   
+   if e % 5 == 0:
+      moe = (y - yhat) / torch.abs(y) * 100.0
+      # print(us_y[-1][3], us_yhat[-1][3])
+      mean_moe = moe.mean().detach().item()
+      print(f'margin of error={mean_moe:.2f}')
    
