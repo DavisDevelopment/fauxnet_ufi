@@ -243,15 +243,14 @@ def calc_Xy(cache: Dict[str, pd.DataFrame], columns=None, nT_in=365, nT_out=60):
       b_ranges.append((_min, _max))
       buffer = buffers[k] = renormalize(buffer, (_min, _max), (0.0, 1.0))
       
-      bX, by = [], []
       moves = np.diff(buffer, axis=0)
       move_range = (moves.min(), moves.max())
       moves = renormalize(moves, move_range, (0.0, 1.0))
       move_ranges.append(move_range)
       
       assert len(buffer) == nT_in+nT_out
-      _x = moves[:nT_in]
-      _y = moves[-nT_out:]
+      _x = buffer[:nT_in]
+      _y = buffer[-nT_out:]
       X[k] = _x
       y[k] = _y
       
