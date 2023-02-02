@@ -1,0 +1,4 @@
+#!usr/bin/env bash
+ORIGPROJP=fauxnet;
+
+source  "../${ORIGPROJP}/venv/bin/activate";

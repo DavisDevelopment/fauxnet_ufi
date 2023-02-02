@@ -1,0 +1,11 @@
+*.swp
+*.pyc
+*.lpickle # "(l)ocal-storage" pickle file extension
+__pycache__
+__appcache__
+cache/
+profiling.csv
+_econn_old
+.keys
+venv/
+checkpoints/
