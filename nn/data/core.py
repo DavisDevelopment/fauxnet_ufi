@@ -125,9 +125,12 @@ class TwoPaneWindow:
       
       return (l, r)
    
-   def iter(self):
+   def iter(self, lfn=None, rfn=None, fmtfn=None):
+      if lfn is None and rfn is None and fmtfn is not None:
+         lfn, rfn = fmtfn, fmtfn
+      
       while not self.is_empty():
-         yield self.sample()
+         yield self.sample(lfn, rfn)
          self.next()
    
    # def __next__(self):
@@ -149,4 +152,73 @@ class TwoPaneWindowIterator:
       self.w = w
       
    
+import torch
+from torch import Tensor, tensor, nn
+
+El = Union[Tensor, ndarray]
+
+class TensorBuffer:
+   def __init__(self, size:int, item_shape:Tuple[int, int], dtype=None) -> None:
+      self._capacity = size
+      self.item_shape = item_shape
+      self._pos = 0
+      self.data = np.empty((size, *item_shape), dtype=dtype)
+      
+   def is_full(self)->bool:
+      return (self._pos >= self._capacity)
    
+   def capacity(self)->int:
+      return (self._capacity - self._pos - 1)
+   
+   def size(self)->int:
+      return self._capacity
+   
+   def __len__(self)->int:
+      return self._pos
+      
+   def push(self, el:ndarray):
+      self.grow()
+      self.data[self._pos] = el
+      self._pos += 1
+      return self._pos
+   
+   def pop(self):
+      self._pos -= 1
+      r = self.data[self._pos]
+      return r
+   
+   def shift(self):
+      first = self.data[0]
+      for i in range(1, self._pos):
+         self.data[i-1] = self.data[i]
+      return first
+   
+   def unshift(self, el:ndarray):
+      for i in range(self._pos-1, 1, -1):
+         self.data[i+1] = self.data[i]
+      self.grow()
+      self.data[0] = el
+      self._pos += 1
+      return self._pos
+   
+   def get(self)->ndarray:
+      return self.data[:self._pos]
+   
+   def tcpy(self)->Tensor:
+      return torch.from_numpy(self.data.copy())
+   
+   @property
+   def T(self)->Tensor:
+      return torch.from_numpy(self.get())
+   
+   def grow(self, mult:int=2):
+      if self._pos == len(self.data):
+         new_cap = (self._capacity * mult)
+         data_size = len(self.data)
+         # self.data.resize((new_cap, *self.item_shape))
+         _d = self.data
+         self.data = np.empty((new_cap, *self.item_shape))
+         self._capacity = new_cap
+         self.data[:data_size] = _d
+      
+      return self

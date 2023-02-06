@@ -66,6 +66,9 @@ class VecMap(Module):
       self.axis = axis
       self.output_shape = output_shape
       
+   def parameters(self):
+      return self.f.parameters()
+      
    def forward(self, X:Tensor):
       view = X.flatten(end_dim=self.axis)
       out = None if self.output_shape is None else Variable(zeros(self.output_shape))
@@ -179,6 +182,38 @@ class EconomyForecastingModule(EconomyModule):
          # print(y)
          forecast[symbol] = y
       return forecast
+   
+class MarketParticipantValuationEncoding(Module):
+   def __init__(self, pop_size:int, n_symbols:int, encoder=None) -> None:
+      super().__init__()
+      
+      self.portfolio = Variable(randn((pop_size, 2)))
+      self.pB = Parameter(randn((pop_size,)))
+      self.pW = Parameter(randn((pop_size,)))
+      
+      self.register_parameter('pB', self.pB)
+      self.register_parameter('pW', self.pW)
+      
+      self.pressure_encoder = encoder
+      self.balancer = autofn(2, 1)
+      
+   def forward(self, market:Tensor):
+      assert self.pressure_encoder is not None
+      
+      p_e = self.pressure_encoder(market)
+      pl_onehot = torch.argmax(p_e, 1)
+      supply, demand = 0, 0
+      for i in range(len(pl_onehot)):
+         label = pl_onehot[i]
+         if label == 0:
+            supply += 1
+         elif label == 1:
+            demand += 1
+      
+      supply /= len(p_e)
+      demand /= len(p_e)
+      
+      return self.balancer(tensor((supply, demand)))
 
 from nn.namlp import NacMlp
 

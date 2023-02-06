@@ -12,6 +12,8 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from typing import *
 
+# def flatparams(*modules)
+
       
 def torch_vectorize(f, inplace=False, end_dim=None):
    #TODO: implement this such that it can be jitted by pytorch

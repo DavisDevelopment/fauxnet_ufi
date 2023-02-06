@@ -1,60 +1,55 @@
 
+import pickle
 from time import sleep
-# from econn.model import *
-# from nn.components import *
+
+from numpy import asanyarray, ndarray
+from nn.arch.transformer.TimeSeriesTransformer import TimeSeriesTransformer
 from nn.common import *
-from datatools import renormalize
+from datatools import ohlc_resample, renormalize, unpack
    
 from nn.namlp import NacMlp
-
-#* (symbols, timesteps, features)
-nK, nT, nC, nM = 10, 90, 5, 128
-
-X = randn((nK, nT, nC))
-y = randn((nK, 1)).squeeze()
+from cytoolz import *
+import pandas as pd
 
 from datatools import get_cache, calc_Xy, load_ts_dump
+from nn.data.core import TwoPaneWindow, TensorBuffer
+from pandas import DataFrame
+from typing import *
+# from nn.arch.transformer.TransformerDataset import TransformerDataset, generate_square_subsequent_mask
+from tools import unzip
+from nn.arch.lstm_vae import *
+import torch.nn.functional as F
 
-kcache = load_ts_dump()
-syms, ranges, buffers, move_ranges, ground, X, y = calc_Xy(kcache, 'open,high,low,close'.split(','), nT_out=1)
-nK, nT, nC = X.shape
-print('nK=', nK, 'nT=', nT, 'nC=', nC)
+def list_stonks(stonk_dir='./stonks'):
+   from pathlib import Path
+   return [n[:-8] for n in Path(stonk_dir).rglob('*.feather')]
 
-nn = EconomyForecastingModule(n_symbols=nK, forecast_shape=(1, 4), market_transform=(
-   MarketImageEncoder(input_shape=(nT, nC), n_output_terms=32),
-   MarketImageDecoder(n_input_terms=32, output_shape=(1, 4))
-))
+def load_frame(sym:str):
+   df:DataFrame = pd.read_feather('./stonks/%s.feather' % sym)
+   print(df.columns)
+   return df.set_index('datetime', drop=False)
 
-print(X.shape)
-print(nn)
+df = load_frame('AAPL')[['open', 'high', 'low', 'close', 'volume']]
+data = df.to_numpy()
 
-X, y = torch.from_numpy(X), torch.from_numpy(y)
-X, y = X.float(), y.float()
-y = y.squeeze(1)
+print(data)
 
-print(nn(X))
-# us_y = renormalize
+enc_seq_len = 150
+dec_seq_len = 30
 
-# encoder = Encoder(nK, nT, nC)
-opt = torch.optim.RMSprop(nn.parameters(), lr=0.0002)
-crit = torch.nn.MSELoss()
+out_seq_len = 180
 
-epochs = 30
-us_y = torch.zeros_like(y)
-for k in range(nK):
-   us_y[k] = renormalize(y[k], (0.0, 1.0), move_ranges[k])
+win = TwoPaneWindow(180, 30)
+win.load(data)
+print(win)
 
-for e in range(epochs):
-   yhat = nn(X).squeeze()
-   loss = crit(y, yhat)
-   loss.backward()
-   opt.step()
-   
-   print(f'epoch {e}: {loss}')
-   
-   if e % 5 == 0:
-      moe = (y - yhat) / torch.abs(y) * 100.0
-      # print(us_y[-1][3], us_yhat[-1][3])
-      mean_moe = moe.mean().detach().item()
-      print(f'margin of error={mean_moe:.2f}')
-   
+seq_pairs = list(win.iter())
+print(len(seq_pairs), 'sequences loaded')
+X, y = [list(_) for _ in unzip(seq_pairs)]
+X, y = np.asanyarray(X), np.asanyarray(y)
+Xb, yb = torch.from_numpy(X), torch.from_numpy(y)
+Xb, yb = Xb.float(), yb.float()
+
+from nn.ts.classification import LinearBaseline, FCNBaseline, InceptionModel, ResNetBaseline
+
+# LinearBaseline()

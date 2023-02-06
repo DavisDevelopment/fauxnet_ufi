@@ -10,6 +10,7 @@ import sys
 import math
 import random
 import re
+
 P = os.path
 
 from numpy import ndarray
@@ -20,7 +21,7 @@ sys.path.append(base)
 
 from tqdm import tqdm
 import pandas as pd
-
+from pandas import DataFrame
 
 # from sklearn.preprocessing import MinMaxScaler, minmax_scale
 from tools import unzip
@@ -212,7 +213,7 @@ def calc_Xy(cache: Dict[str, pd.DataFrame], columns=None, nT_in=365, nT_out=60):
    buffers = []
    
    for k, sym in enumerate(all_symbols):
-      df = cache[sym][columns].tail(nT_in + nT_out)
+      df = cache[sym][columns]
       df = df.fillna(method='ffill').fillna(method='bfill').dropna()
       df_np:ndarray = df.to_numpy()
       
@@ -233,28 +234,41 @@ def calc_Xy(cache: Dict[str, pd.DataFrame], columns=None, nT_in=365, nT_out=60):
    
    b_ranges = []
    move_ranges = []
-   X = np.zeros((nK, nT_in, nC))
-   y = np.zeros((nK, nT_out, nC))
    
-   #* scale the buffers
-   for k in range(len(symbols)):
-      buffer = buffers[k]
-      _min, _max = buffer.min(), buffer.max()
-      b_ranges.append((_min, _max))
-      buffer = buffers[k] = renormalize(buffer, (_min, _max), (0.0, 1.0))
-      
-      moves = np.diff(buffer, axis=0)
-      move_range = (moves.min(), moves.max())
-      moves = renormalize(moves, move_range, (0.0, 1.0))
-      move_ranges.append(move_range)
-      
-      assert len(buffer) == nT_in+nT_out
-      _x = buffer[:nT_in]
-      _y = buffer[-nT_out:]
-      X[k] = _x
-      y[k] = _y
-      
-      print(f'x[k].shape={_x.shape}', f'y[k].shape={_y.shape}')
+   totalsize = len(buffers[0])
+   for i in range(1, len(buffers)):
+      totalsize = min(totalsize, len(buffers[i]))
+   nB = len(list(range(1+nT_in, totalsize-nT_out)))
+   print('batch_size=', )
+   # for j, b in enumerate(buffers):
+   #    buffers[j] = b[:len(buffers[0]*nB)]
+   
+   X = np.zeros((nB, nK, nT_in, nC))
+   y = np.zeros((nB, nK, nT_out, nC))
+   
+   for b in range(1+nT_in, totalsize-nT_out):
+      for k in range(len(symbols)):
+         buffer = buffers[k]
+         assert len(buffer) >= totalsize-1
+         _min, _max = buffer.min(), buffer.max()
+         b_ranges.append((_min, _max))
+         
+         buffer = buffers[k] = renormalize(buffer, (_min, _max), (0.0, 1.0))
+         
+         # assert len(buffer) == nT_in+nT_out
+         
+         _x:ndarray = buffer[b-nT_in-1:b-1]
+         _y:ndarray = np.expand_dims(buffer[b-1], 0)
+
+         print(_x.shape, _y.shape)
+         
+         assert _x.shape == X.shape[2:], f'{_x.shape} != {X.shape[2:]}'
+         assert _y.shape == y.shape[2:], f'{_y.shape} != {y.shape[2:]}'
+         
+         X[b-1-nT_in, k] = _x
+         y[b-1-nT_in, k] = _y
+         
+         print(f'x[k].shape={_x.shape}', f'y[k].shape={_y.shape}')
       
    return (
       symbols,
@@ -267,6 +281,43 @@ def calc_Xy(cache: Dict[str, pd.DataFrame], columns=None, nT_in=365, nT_out=60):
    )
 
 import pickle
+from cytoolz import *
+
+@curry
+def ohlc_resample(freq:str, df:DataFrame):
+   G = None
+   
+   if freq == 'D':
+      G = df.datetime.dt.date
+   else:
+      raise Exception(f'Invalid frequency {freq}')
+   
+   sampler = df.groupby(G)
+   
+   def ohlc(g: DataFrame):
+      idx = g.datetime.iloc[0].date
+      O = g.open.iloc[0]
+      C = g.close.iloc[-1]
+      L = g.low.min()
+      H = g.high.max()
+      V = g.volume.sum()
+      
+      return pd.Series(data=[O, H, L, C, V], index=['open', 'high', 'low', 'close', 'volume'], name=idx)
+   
+   rows = sampler.apply(ohlc)
+   return rows
+
+def unpack(packed_path: str):
+   (symbols, indexes, frames) = pickle.load(open(packed_path, 'rb'))
+   result = {}
+   for sym in symbols:
+      df:DataFrame = frames[sym]
+      # print(df)
+      if 'datetime' in df.columns:
+         df = df.set_index('datetime', drop=True)
+      result[sym] = df
+      
+   return result
 
 def load_ts_dump(from_folder='./nasdaq_100'):
    man = pickle.load(open(P.join(from_folder, 'manifest.pickle'), 'rb'))
@@ -281,3 +332,96 @@ def load_ts_dump(from_folder='./nasdaq_100'):
       result[sym] = df
    
    return result
+
+def mk_hrs2tmrw_ds():
+   hourly = unpack('./sp100_hourly.pickle')
+   daily:Dict[str, DataFrame] = unpack('./sp100_daily.pickle')
+
+   symbols = list(hourly.keys())
+   n_days = np.array([len(d) for d in daily.values()]).max()
+   assert set(hourly.keys()) == set(daily.keys())
+
+   # daily_hours = np.zeros((len(symbols), n_days, 7, 5), 'float32')
+   # daily_tomorrow_summary = np.zeros((len(symbols), n_days, 4), dtype='float32')
+
+   daily_hours, daily_tomorrow_summary = TensorBuffer(100000, (7, 5)), TensorBuffer(100000, (4,))
+
+   daysidx:Optional[pd.DatetimeIndex] = None
+
+   for d in daily.values():
+      if len(d) == n_days:
+         daysidx = d.index
+
+   assert daysidx is not None
+
+   dates:np.ndarray = daysidx.values
+   skipped = []
+
+   for i, symbol in enumerate(symbols):
+      hours = hourly[symbol]
+      hours = hours.pct_change()[1:]
+      
+      hours['date'] = hours.index
+      hours['date'] = hours['date'].dt.date
+      
+      days = daily[symbol]
+      days = days.pct_change()[1:]
+      
+      for j, date in enumerate(days.index):
+         dhd = hours['date']
+         day_hours:DataFrame = hours[hours.date == date][['open', 'high', 'low', 'close', 'volume']]
+         day = days.loc[date]
+         
+         if len(day_hours) < 7:
+            # print(f'Skipping {date} due to insufficient number of hours for the trading day')
+            skipped.append((symbol, day_hours.index))
+            continue
+         
+         elif (True in pd.isna(day_hours)) or (True in pd.isna(day)):
+            # print(f'Skipping {date} due to null values')
+            skipped.append((symbol, day_hours.index))
+            continue
+         
+         elif j == len(days.index)-2:
+            continue
+         
+         day_hours = day_hours.to_numpy()
+         (date_where,) = np.where(dates == date)
+         # daily_hours[i, date_where, :, :] = day_hours
+         daily_hours.push(day_hours)
+         
+         if date_where[0] >= (len(dates) - 2):
+            continue
+         
+         next_date  = np.datetime64(str(dates[date_where+2][0]))
+         next_date2 = np.datetime64(str(days.loc[date:].index[0]))
+         
+         # assert next_date2 == next_date, f'{next_date2} != {next_date}'
+         
+         if next_date > dates.max() or next_date > days.index.max():
+            continue
+         
+         tomorrow = days.loc[(days.index == next_date)|(days.index == next_date2)].iloc[0].to_numpy().squeeze()
+         # daily_tomorrow_summary[i, date_where, :] = tomorrow[:-1]
+         daily_tomorrow_summary.push(tomorrow[:-1])
+         
+   return daily_hours.T, daily_tomorrow_summary.T
+
+def load_hrs2tmrw_ds():
+   import os
+   P = os.path
+   ds_path = './today_hours2tomorrow_ohlc.pickle'
+   if P.exists(ds_path):
+      daily_hours, daily_tomorrow_summary = pickle.load(open(ds_path, 'rb'))
+   else:
+      daily_hours, daily_tomorrow_summary = mk_hrs2tmrw_ds()
+      pickle.dump((daily_hours, daily_tomorrow_summary), open(ds_path, 'wb'))
+      
+   X, fy = daily_hours, daily_tomorrow_summary
+   return X, fy
+
+def pl_binary_labeling(y: ndarray):
+   labels = np.zeros((len(y), 2))
+   labels[:, 0] = (y[:, 3] > 0).astype(np.float32)
+   labels[:, 1] = (y[:, 3] < 0).astype(np.float32)
+   return labels

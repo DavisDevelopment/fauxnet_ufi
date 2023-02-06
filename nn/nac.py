@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from torch import Tensor, tensor, typename
 from torch.nn.parameter import Parameter
-
+from torch.jit import script
 from typing import *
 
 class NacCell(nn.Module):
@@ -58,6 +58,7 @@ class NacCell(nn.Module):
    def extra_repr(self)->str:
       return f'in_shape={self._in_shape}, out_shape={self._out_shape}'
    
+# @script
 class NeuralAccumulatorCell(nn.Module):
    """A Neural Accumulator (NAC) cell [1].
 
