@@ -9,3 +9,6 @@ _econn_old
 .keys
 venv/
 checkpoints/
+stonks/
+
+*.pickle
