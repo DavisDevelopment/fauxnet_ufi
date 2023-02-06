@@ -420,8 +420,8 @@ def load_hrs2tmrw_ds():
    X, fy = daily_hours, daily_tomorrow_summary
    return X, fy
 
-def pl_binary_labeling(y: ndarray):
+def pl_binary_labeling(y:ndarray):
    labels = np.zeros((len(y), 2))
-   labels[:, 0] = (y[:, 3] > 0).astype(np.float32)
-   labels[:, 1] = (y[:, 3] < 0).astype(np.float32)
+   labels[:, 0] = (y > 0).astype(np.float32)
+   labels[:, 1] = (y < 0).astype(np.float32)
    return labels

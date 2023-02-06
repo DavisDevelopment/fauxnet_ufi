@@ -55,6 +55,9 @@ class InceptionModel(nn.Module):
         bottleneck_channels = cast(List[int], self._expand_to_blocks(bottleneck_channels,
                                                                      num_blocks))
         kernel_sizes = cast(List[int], self._expand_to_blocks(kernel_sizes, num_blocks))
+        print('channels=', channels)
+        print('bottleneck_channels=', bottleneck_channels)
+        print('kernel_sizes=', kernel_sizes)
         if use_residuals == 'default':
             use_residuals = [True if i % 3 == 2 else False for i in range(num_blocks)]
         use_residuals = cast(List[bool], self._expand_to_blocks(
