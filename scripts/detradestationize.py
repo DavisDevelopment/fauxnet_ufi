@@ -189,17 +189,6 @@ def convert(d_in:str, d_out:str=''):
    
    return (found, converted)
 
-def ensureallequal(a:Iterable[Any]):
-   a = list(a)
-   
-   l = a[0]
-   for i in range(len(a)-1):
-      if l != a[1+i]:
-         return False
-      l = a[1+i]
-
-   return True
-
 def pack(d:Union[Dict[str, DataFrame], str]=None, format='pickle', target='./something.pack', resample=None, homogenize=False):
    assert d is not None
    if isinstance(d, dict):

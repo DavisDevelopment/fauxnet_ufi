@@ -420,8 +420,25 @@ def load_hrs2tmrw_ds():
    X, fy = daily_hours, daily_tomorrow_summary
    return X, fy
 
-def pl_binary_labeling(y:ndarray):
-   labels = np.zeros((len(y), 2))
-   labels[:, 0] = (y > 0).astype(np.float32)
-   labels[:, 1] = (y < 0).astype(np.float32)
+def percent_change(arr):
+   result = np.diff(arr)/arr[1:]*100
+   return result
+
+def pl_binary_labeling(y: ndarray):
+   labels = np.zeros((len(y), 3))
+   
+   ydelta = percent_change(y)
+   print(ydelta[:10])
+   thresh = 0.5
+   
+   E = np.argwhere((ydelta <= thresh)&(ydelta >= -thresh))
+   P = np.argwhere(ydelta > 2)
+   L = np.argwhere(ydelta < -2)
+   
+   labels[E, 0] = 1
+   labels[L, 1] = 1
+   labels[P, 2] = 1
+   
+   print(labels[:10])
+   
    return labels

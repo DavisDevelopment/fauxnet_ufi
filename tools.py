@@ -113,18 +113,14 @@ def waitForNetworkConnection():
       sleep(5.0)
    return True
 
-
 from itertools import *
 from cytoolz import *
-# from cytoolz.itertoolz import 
 
 from typing import *
 from time import time_ns as nanosecs
 from time import time as secs
 import inspect
-# from ds.gtools import Struct
 import pandas as pd
-#import modin.pandas as pd
 import numpy as np
 import sys, os
 
@@ -152,10 +148,6 @@ class Struct:
    
    def asdict(self):
       return dict(**self.__dict__)
-
-prof_entries:List[Struct] = []
-import atexit
-
 
 def diffdf(hp, df:pd.DataFrame):
    columns = hp.feature_columns
@@ -199,9 +191,7 @@ def print_profiling():
    
    pr.to_csv('profiling.csv')
    
-atexit.register(print_profiling)
-
-noprofile = '--noprofile' in sys.argv
+noprofile = True#'--noprofile' in sys.argv
 
 def fnpath(f):
    m = f.__module__

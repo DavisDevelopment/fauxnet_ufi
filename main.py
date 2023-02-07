@@ -27,11 +27,10 @@ from nn.arch.transformer.TransformerDataset import generate_square_subsequent_ma
 
 def list_stonks(stonk_dir='./stonks'):
    from pathlib import Path
-   return [n[:-8] for n in Path(stonk_dir).rglob('*.feather')]
+   return [str(n)[:-8] for n in Path(stonk_dir).rglob('*.feather')]
 
 def load_frame(sym:str):
    df:DataFrame = pd.read_feather('./stonks/%s.feather' % sym)
-   print(df.columns)
    return df.set_index('datetime', drop=False)
 
 def shuffle_tensors_in_unison(*all, axis:int=0):
@@ -69,11 +68,11 @@ def norm_batches(x: Tensor):
          _, scaled_batch = rescale(batch, 0.0, 1.0)
          res[i] = scaled_batch
       return res
+   
+symbols = list_stonks()
 
 df = load_frame('AAPL')[['open', 'high', 'low', 'close']]
-df['delta'] = df['close'].diff()
-
-print(df)
+df['delta_pct'] = df['close'].pct_change()
 data = df.to_numpy()[1:]
 
 num_input_channels = 4
@@ -91,13 +90,15 @@ win = TwoPaneWindow(in_seq_len, out_seq_len)
 win.load(data)
 
 seq_pairs = list(win.iter(lfn=lambda x: x[:, :-1]))
-# print(len(seq_pairs), 'sequences loaded')
 Xl, yl = [list(_) for _ in unzip(seq_pairs)]
 Xnp:ndarray
 ynp:ndarray 
 Xnp, ynp = np.asanyarray(Xl), np.asanyarray(yl).squeeze(1)
+
+print(Xnp.shape, ynp.shape)
 ynp = ynp
-ynp = pl_binary_labeling(ynp[:, 4])
+ynp:ndarray = pl_binary_labeling(ynp[:, 3])
+
 Xnp, ynp = Xnp, ynp
 
 X, y = torch.from_numpy(Xnp), torch.from_numpy(ynp)
@@ -116,7 +117,6 @@ X, y = X[:-spliti], y[:-spliti]
 
 X_test, X, y_test, y = X, X_test, y, y_test
 print(X.shape, y.shape)
-input()
 
 max_epochs = 25
 
@@ -135,8 +135,6 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       opt.zero_grad()
       
       y_pred = model(X)
-      # y_labels = torch.argmax(y, 1)
-      # y_pred_labels = torch.argmax(y_pred, 1)
       
       loss = crit(y, y_pred)
       loss.backward()
@@ -164,7 +162,7 @@ def evaluate(m: Module, X, y):
    # print('accuracy=%f' % accuracy.item())
    return accuracy.item()
 
-core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
+core_kw = dict(in_channels=num_input_channels, num_pred_classes=3)
 model_cores = [
    ResNetBaseline,
    FCNBaseline,
@@ -194,9 +192,22 @@ for base_ctor, learn_rate, model in model_variants:
    hist, _ = fit(model, X, y, criterion=MSELoss(), eval_X=X_test, eval_y=y_test, lr=learn_rate)
    score = evaluate(model, X_test, y_test)
    hist = pd.DataFrame.from_records(list(hist.values()))
+
+   print(f'baseline="{base_ctor.__qualname__}", learn_rate={learn_rate}')
    print('final accuracy score:', score)
    
    experiments.append((score, base_ctor))
    print(hist.sort_values(by='accuracy', ascending=False))
    
 summary = pd.DataFrame.from_records(experiments)
+hist, tst = fit(
+   Sequential(
+      InceptionModel(10, 4, out_channels=3, bottleneck_channels=[2, 3, 4, 5, 6, 7, 8, 9, 10], num_pred_classes=2, kernel_sizes=4)
+   ),
+   X=X,
+   y=torch.argmax(y, axis=1),
+   eval_X=X_test,
+   eval_y=y_test,
+   lr=0.0002
+)
+print(hist)
