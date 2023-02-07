@@ -121,24 +121,27 @@ print(X.shape, y.shape)
 max_epochs = 25
 
 from tqdm import tqdm
+from nn.optim import ScheduledOptim, Checkpoints
 
-def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=None, lr=0.001):
+def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=None, lr=0.001, epochs=None):
    # model = LinearBaseline(in_seq_len, num_pred_classes=num_predicted_classes)
    assert criterion is not None
-   opt = torch.optim.Adam(model.parameters(), lr=lr)
+   optimizer = Checkpoints(
+      model,
+      ScheduledOptim(torch.optim.Adam(model.parameters(), lr=lr), 0.035, 4, 5)
+   )
    crit = criterion
 
-   fit_iter = tqdm(range(max_epochs))
+   fit_iter = tqdm(range(epochs if epochs is not None else max_epochs))
    metric_logs = OrderedDict()
    
    for e in fit_iter:
-      opt.zero_grad()
+      optimizer.zero_grad()
       
       y_pred = model(X)
       
       loss = crit(y, y_pred)
       loss.backward()
-      opt.step()
       
       fit_iter.set_description(f'epoch {e}')
       
@@ -148,9 +151,12 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
          accuracy = evaluate(model, eval_X, eval_y)
          le['accuracy'] = accuracy
          fit_iter.set_postfix(le)
+
+      optimizer.step(le)
       
+   model = optimizer.close()
       
-   return metric_logs, model
+   return DataFrame.from_records(list(metric_logs.values())), model
 
 def evaluate(m: Module, X, y):
    y_eval = m(X)
@@ -162,15 +168,29 @@ def evaluate(m: Module, X, y):
    # print('accuracy=%f' % accuracy.item())
    return accuracy.item()
 
+
 core_kw = dict(in_channels=num_input_channels, num_pred_classes=3)
+
+# winner = Sequential(
+#    Dropout(p=0.2),
+#    FCNBaseline(**core_kw),
+#    ReLU()
+# )
+
+# hist, winner = fit(winner, X, y, MSELoss(), eval_X=X_test, eval_y=y_test, lr=0.001, epochs=200)
+
+# print('APEX.accuracy  =  ', evaluate(winner, X_test, y_test))
+# input()
+
 model_cores = [
    ResNetBaseline,
    FCNBaseline,
 ]
 rates = [
-   0.001,
+   0.00001,
    0.0001,
-   0.00001
+   0.0002,
+   0.001
 ]
 
 model_variants = (
@@ -191,23 +211,10 @@ experiments = []
 for base_ctor, learn_rate, model in model_variants:
    hist, _ = fit(model, X, y, criterion=MSELoss(), eval_X=X_test, eval_y=y_test, lr=learn_rate)
    score = evaluate(model, X_test, y_test)
-   hist = pd.DataFrame.from_records(list(hist.values()))
+   # hist = pd.DataFrame.from_records(list(hist.values()))
 
    print(f'baseline="{base_ctor.__qualname__}", learn_rate={learn_rate}')
    print('final accuracy score:', score)
    
    experiments.append((score, base_ctor))
    print(hist.sort_values(by='accuracy', ascending=False))
-   
-summary = pd.DataFrame.from_records(experiments)
-hist, tst = fit(
-   Sequential(
-      InceptionModel(10, 4, out_channels=3, bottleneck_channels=[2, 3, 4, 5, 6, 7, 8, 9, 10], num_pred_classes=2, kernel_sizes=4)
-   ),
-   X=X,
-   y=torch.argmax(y, axis=1),
-   eval_X=X_test,
-   eval_y=y_test,
-   lr=0.0002
-)
-print(hist)
