@@ -23,7 +23,7 @@ from pandas import DataFrame
 from typing import *
 from nn.ts.classification.fcn_baseline import FCNNaccBaseline
 # from nn.arch.transformer.TransformerDataset import TransformerDataset, generate_square_subsequent_mask
-from tools import unzip, safe_div, argminby, argmaxby
+from tools import Struct, gets, maxby, unzip, safe_div, argminby, argmaxby
 from nn.arch.lstm_vae import *
 import torch.nn.functional as F
 from nn.ts.classification import LinearBaseline, FCNBaseline, InceptionModel, ResNetBaseline
@@ -88,7 +88,12 @@ hidden_sizes = [
 win = TwoPaneWindow(in_seq_len, out_seq_len)
 win.load(data)
 
-seq_pairs = list(win.iter(lfn=lambda x: x[:, :-1]))
+from sklearn.preprocessing import MinMaxScaler
+
+scaler = MinMaxScaler()
+scaler.fit(data[:, :-1])
+
+seq_pairs = list(win.iter(lfn=lambda x: scaler.transform(x[:, :-1])))
 Xl, yl = [list(_) for _ in unzip(seq_pairs)]
 Xnp:ndarray
 ynp:ndarray 
@@ -104,6 +109,7 @@ X, y = torch.from_numpy(Xnp), torch.from_numpy(ynp)
 X, y = X.float(), y.float()
 X, y = shuffle_tensors_in_unison(X, y)
 
+
 randsampling = torch.randint(0, len(X), (2000,))
 X = X.swapaxes(1, 2)
 X, y = X[randsampling], y[randsampling]
@@ -116,7 +122,7 @@ X, y = X[:-spliti], y[:-spliti]
 X_test, X, y_test, y = X, X_test, y, y_test
 print(X.shape, y.shape)
 
-max_epochs = 80
+max_epochs = 10
 
 from tqdm import tqdm
 from nn.optim import ScheduledOptim, Checkpoints
@@ -136,6 +142,7 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       #    n_warmup_steps=20
       # )
    )
+   optimizer.n_warmup_steps = 2
    crit = criterion
 
    fit_iter = tqdm(range(epochs))
@@ -151,11 +158,12 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       
       fit_iter.set_description(f'epoch {e}')
       
-      le = metric_logs[e] = dict(epoch=e, loss=loss.detach().item())
+      le = metric_logs[e] = dict(epoch=e, loss=loss.detach().item(), accuracy=None)
       
       if not (eval_X is None or eval_y is None):
-         accuracy = evaluate(model, eval_X, eval_y)
-         le['accuracy'] = accuracy
+         eval_metrics = evaluate(model, eval_X, eval_y)
+         le['metrics'] = tuple(f'{n:.2f}' for n in (eval_metrics.false_positives, eval_metrics.p, eval_metrics.l))
+         le['accuracy'] = eval_metrics.score
          fit_iter.set_postfix(le)
 
       optimizer.step(le)
@@ -181,12 +189,13 @@ def evaluate(m: Module, X:Tensor, y:Tensor):
    assert (y.shape == y_eval.squeeze().shape)
    
    count = lambda *bool_exprs: reduce(torch.logical_and, bool_exprs).int().count_nonzero().item()
+   select = lambda array, *bool_exprs: array[reduce(torch.logical_and, bool_exprs)]
    
    labels = y.argmax(dim=1)
    pred_labels = y_eval.argmax(dim=1)
    q_p = (labels == 1)
    q_l = (labels == 0)
-   matched = (pred_labels == labels)
+   matched:BoolTensor = (pred_labels == labels)
    
    n_p, n_l = count(q_p), count(q_l)
    n_matched, n_correct_p, n_correct_l = (
@@ -199,6 +208,11 @@ def evaluate(m: Module, X:Tensor, y:Tensor):
       count(torch.logical_not(matched), pred_labels == 1),
       count(torch.logical_not(matched), pred_labels == 0)
    )
+   
+   # select(labels, matched.logical_not(), labels == )
+   misidentified = count(pred_labels == 1, labels == 0) + count(labels == 1, pred_labels == 0)
+   
+   misids = safe_div(misidentified, n_p+n_l)
 
    accuracy = safe_div(n_correct_p + n_correct_l, n_p + n_l) * 100
    
@@ -207,13 +221,18 @@ def evaluate(m: Module, X:Tensor, y:Tensor):
    # print(f'{n_correct_p}/{n_p} P-samples')
    # print(f'{n_correct_l}{n_l} L-samples')
    
-   return accuracy
+   return Struct(
+      score=accuracy,
+      p=safe_div(n_correct_p, n_p),
+      l=safe_div(n_correct_l, n_l),
+      false_positives=misids
+   )
 
 
 core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
 
 model_cores = [
-   ResNetBaseline,
+   # ResNetBaseline,
    FCNBaseline,
    # FCNNaccBaseline,
 ]
@@ -221,11 +240,12 @@ model_cores = [
 rates = [
    0.0005,
    0.00015,
-   0.001,
+   # 0.001,
 ]
 
 losses = [
-   BCEWithLogitsLoss
+   BCEWithLogitsLoss,
+   # MSELoss,
 ]
 
 import random
@@ -238,35 +258,41 @@ model_variants = (
       crit_factory(),
       Sequential(
          base_factory(**core_kw),
-         Sigmoid()
+         # LogSoftmax(dim=-1)
+         # ReLU()
+         Softmax()
       )
    )
    
    for (base_factory, rate, crit_factory) in combos
 )
 
-experiments:List[Tuple[float, Module]] = []
+experiments:List[Dict[str, Any]] = []
 
 for mventry in model_variants:
    base_ctor, learn_rate, criterion, model = mventry
    
    hist, _ = fit(model, X, y, criterion=criterion, eval_X=X_test, eval_y=y_test, lr=learn_rate)
-   score = evaluate(model, X_test, y_test)
+   metrics = evaluate(model, X_test, y_test)
 
    print(f'baseline="{base_ctor.__qualname__}", learn_rate={learn_rate}, loss_fn={criterion}')
-   print('final accuracy score:', score)
+   print('final accuracy score:', metrics.score)
    
-   experiments.append((score, model))
+   experiments.append(dict(
+      **metrics.asdict(),
+      model=model, 
+      config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__)
+   ))
+   
    print(hist.sort_values(by='accuracy', ascending=False))
 
-best_loop = reduce(lambda x, y: x if x[0] > y[0] else y, experiments)
-score, model = best_loop
+best_loop = maxby(experiments, key=lambda e: e['score'])
+score, model, config = gets(best_loop, 'score', 'model', 'config')
 
+
+#* save the best-qualified classifier
 torch.save(model.state_dict(), './classifier_pretrained_state')
+torch.save(model, './classifier_pretrained.pt')
 accuracy = evaluate(model, X_test, y_test)
 
-# model:ScriptModule = script(model.eval())
-
-# model.save('./classifier_pretrained.pt')
-
-print('accuracy score for saved model:', accuracy)
+pprint(config)
