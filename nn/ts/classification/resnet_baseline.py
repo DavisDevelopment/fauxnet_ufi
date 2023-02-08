@@ -41,6 +41,8 @@ class ResNetBaseline(nn.Module):
         x = self.layers(x)
         return self.final(x.mean(dim=-1))
 
+def no_op(x: torch.Tensor) -> torch.Tensor:
+    return x
 
 class ResNetBlock(nn.Module):
 
@@ -63,6 +65,8 @@ class ResNetBlock(nn.Module):
                                   kernel_size=1, stride=1),
                 nn.BatchNorm1d(num_features=out_channels)
             ])
+        else:
+            self.residual = no_op
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
 

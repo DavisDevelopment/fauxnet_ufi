@@ -12,3 +12,5 @@ checkpoints/
 stonks/
 
 *.pickle
+
+.model_checkpoints/

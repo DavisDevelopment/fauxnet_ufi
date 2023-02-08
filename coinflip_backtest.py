@@ -1,7 +1,9 @@
 
+from pprint import pprint
 import sys, os
 
-from datatools import norm_batches
+from datatools import norm_batches, percent_change, rescale
+from nn.ts.classification.fcn_baseline import FCNNaccBaseline
 P = os.path
 import torch
 import numpy as np
@@ -28,16 +30,32 @@ def load_dataframe(symbol:str, dir='./', format='csv', **read_kwargs):
 def get_model_inputs(df: pd.DataFrame):
    df = df.copy()
    data:ndarray = df.to_numpy()
+   # p, l = count_classes(data)
+   # print(f'Loaded dataset contains {p} P-samples, and {l} L-samples')
+   
+   # data_range, scaled_data = rescale(from_numpy(data))
+   # data = scaled_data.numpy()
+   p, l = count_classes(data)
+   print(f'Loaded dataset contains {p} P-samples, and {l} L-samples')
 
-   num_input_channels = 4
-   num_predicted_classes = 3
    in_seq_len = 7
    out_seq_len = 1
    
    for i in range(1+in_seq_len, len(data)-out_seq_len-1):
       tstamp = df.index[i]
       X = from_numpy(data[i-in_seq_len:i]).unsqueeze(0).float().swapaxes(1, 2)
+      
       yield tstamp, X
+      
+def count_classes(y: ndarray):
+   ydelta = percent_change(y[:, 3])
+   thresh = 0.5
+   
+   E = np.argwhere((ydelta <= thresh)&(ydelta >= -thresh))
+   P = np.argwhere(ydelta > 2)
+   L = np.argwhere(ydelta < -2)
+   
+   return len(P), len(L)
 
 def run_backtest(model, df:pd.DataFrame):
    steps = []
@@ -71,14 +89,14 @@ def run_backtest(model, df:pd.DataFrame):
       logs.append(('B', t, vol, today.close))
          
    for time, X in get_model_inputs(df):
-      X = norm_batches(X)
       ypred = model(X).argmax()
-      today = df.loc[time]
-      print(X[-1], ypred)
       
       liq(time)
       balances.append((time, dollars))
       
+      print(X[0, -1])
+      if ypred != 0:
+         print('SUCCESS!')
       if ypred == 2:
          buy(time)
                
@@ -99,14 +117,18 @@ def run_backtest(model, df:pd.DataFrame):
    
    return logs, balances
 
+if __name__ == '__main__':
+   stock = load_dataframe('AAPL', './stonks', format='feather')[['open', 'high', 'low', 'close']]
+   print(stock)
 
-stock = load_dataframe('TSLA', './stonks', format='feather')[['open', 'high', 'low', 'close']]
-print(stock)
+   model_state = torch.load('./classifier_pretrained_state')
+   pprint(model_state)
+   input()
+   
+   model = FCNNaccBaseline(**model_state['input_args'])
+   model.load_state_dict(model_state)
 
-model = torch.load('./classifier_pretrained')
-print(model)
-
-logs, balances = run_backtest(model, stock)
-balances = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
-balances = balances.set_index('datetime', drop=True)
-print(balances)
+   logs, balances = run_backtest(model, stock)
+   balances = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
+   balances = balances.set_index('datetime', drop=True)
+   print(balances)

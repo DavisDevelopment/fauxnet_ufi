@@ -69,6 +69,10 @@ class NeuralAccumulatorCell(nn.Module):
    Sources:
       [1]: https://arxiv.org/abs/1808.00508
    """
+   
+   W_hat:Tensor
+   M_hat:Tensor
+   bias:Optional[Tensor]
 
    def __init__(self, in_dim, out_dim):
       super().__init__()
@@ -78,7 +82,6 @@ class NeuralAccumulatorCell(nn.Module):
 
       self.W_hat = Parameter(torch.Tensor(out_dim, in_dim))
       self.M_hat = Parameter(torch.Tensor(out_dim, in_dim))
-      # self.bias = Parameter(torch.zeros())
 
       self.register_parameter('W_hat', self.W_hat)
       self.register_parameter('M_hat', self.M_hat)
@@ -93,7 +96,7 @@ class NeuralAccumulatorCell(nn.Module):
    def forward(self, input:Tensor):
       input = input.float()
       
-      assert input.shape[0] == self.in_dim, '{a} != {b}'.format(a=input.shape[0], b=self.in_dim)
+      assert input.shape[0] == self.in_dim, f'{input.shape[0]} != {self.in_dim}'
       
       W = torch.tanh(self.W_hat) * torch.sigmoid(self.M_hat)
       y = F.linear(input, W.float(), self.bias)

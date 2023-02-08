@@ -63,6 +63,7 @@ class Checkpoints():
        self.optimizer = optimizer
        self.dir = chkpt_dir
        self.fn_template = P.join(self.dir, 'checkpoint_e%d.pth')
+       self.n_warmup_steps = 10
        self._best_key = 'accuracy'
        
        self.n_steps = 0
@@ -80,7 +81,7 @@ class Checkpoints():
       shutil.rmtree(self.dir, ignore_errors=True)
       
    def save_checkpoint(self):
-      if self.n_steps == 0:
+      if self.n_steps == self.n_warmup_steps + 1:
          self.reinit_dir()
       
       chkpt_file_path = (self.fn_template % (self.n_steps + 1))
@@ -97,11 +98,12 @@ class Checkpoints():
    def step(self, metrics:Dict[str, Any]={}):
       assert self._best_key in metrics, f'no "{self._best_key}" metric listed'
       score = metrics[self._best_key]
-      if self._best_score is None or score > self._best_score:
-         self._best_score = score
-         self._best_step = self.n_steps
-      
-      self.save_checkpoint()
+      if self.n_steps > self.n_warmup_steps:
+         if self._best_score is None or score > self._best_score:
+            self._best_score = score
+            self._best_step = self.n_steps
+         
+         self.save_checkpoint()
       
       self.optimizer.step()
       self.n_steps += 1

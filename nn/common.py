@@ -59,6 +59,8 @@ class MarketImageEncoder(MarketModule):
    def extra_repr(self) -> str:
       return f'n_terms={self.n_input_terms}, n_steps={self.n_steps}'
    
+from torch.jit import ignore
+   
 class VecMap(Module):
    def __init__(self, f:Optional[Module]=None, axis=0, output_shape=None) -> None:
       super().__init__()
@@ -67,17 +69,23 @@ class VecMap(Module):
       self.output_shape = output_shape
       
    def parameters(self):
-      return self.f.parameters()
+      return list(super().parameters(recurse=True))+list(self.f.parameters())
       
    def forward(self, X:Tensor):
       view = X.flatten(end_dim=self.axis)
-      out = None if self.output_shape is None else Variable(zeros(self.output_shape))
+      if self.output_shape is not None and self.output_shape[0] is None:
+         out_shape = (len(view), *self.output_shape[1:])
+      else:
+         out_shape = self.output_shape
+      
+      out:Optional[Variable] = None if out_shape is None else Variable(zeros(out_shape))
+      
       for i in range(len(view)):
          r = self.f(view[i])
          assert isinstance(r, Tensor)
          
          if out is None:
-            out = Variable(zeros((len(view), *r.shape), dtype=r.dtype))
+            out = Variable(zeros(len(view), *r.size()))
          
          out[i] = r
          

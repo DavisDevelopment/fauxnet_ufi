@@ -6,6 +6,8 @@ import asyncio as aio
 from functools import partial, wraps
 from typing import Any, Awaitable, Callable, TypeVar, cast
 
+from torch.types import Number
+
 T = TypeVar("T", bound=Callable[..., Any])
 
 def sync_to_async(func: T):
@@ -523,3 +525,40 @@ def filtermap(seq, filterfunc=None, mapfunc=None):
    return list(r)
 
 PI256 = float('3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679821480865132823066470938446095505822317253594081284811174502841027019385211055596446229489549303819644288109756659334461284756482337867831652712019091456485')
+
+from functools import reduce
+
+def logopby(f:Callable[[Any], Any], it, op:Callable[[Any, Any], bool]=None):
+   assert op is not None
+   return reduce(lambda a, b: a if op(a[0], b[0]) else b, zip(map(f, it), it))[1]
+
+from operator import gt, lt
+
+def minby(it, key:Callable[[Any], Any]=None):
+   return logopby(key, it, lt)
+
+def maxby(it, key:Callable[[Any], Any]=None):
+   return logopby(key, it, gt)
+
+def argminby(it, key):
+   from fn import F
+   from cytoolz import nth
+   
+   return minby(enumerate(it), lambda x: key(x[0]))[0]
+
+def argmaxby(it, key):
+   from fn import F
+   from cytoolz import nth
+   
+   return maxby(enumerate(it), lambda x: key(x[0]))[0]
+
+def safe_div(a:Number, b:Number)->Number:
+   """
+   wraps division operation to avoid DivisionByZeroException
+
+   Returns: 0 if either operand is 0, a/b otherwise
+   """
+   if a == 0 or b == 0: 
+      return 0
+   else:
+      return a / b

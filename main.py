@@ -3,12 +3,14 @@ import itertools
 from functools import reduce
 import pickle
 from time import sleep
-
+from pprint import pprint
 from numpy import asanyarray, ndarray
-from torch import renorm
+from torch import BoolTensor, random, renorm
+from torch.jit._script import ScriptModule, ScriptFunction
+from coinflip_backtest import count_classes
 from nn.arch.transformer.TimeSeriesTransformer import TimeSeriesTransformer
 from nn.common import *
-from datatools import ohlc_resample, pl_binary_labeling, renormalize, unpack
+from datatools import P, ohlc_resample, pl_binary_labeling, renormalize, unpack
    
 from nn.namlp import NacMlp
 from cytoolz import *
@@ -19,8 +21,9 @@ from datatools import get_cache, calc_Xy, load_ts_dump, rescale, norm_batches
 from nn.data.core import TwoPaneWindow, TensorBuffer
 from pandas import DataFrame
 from typing import *
+from nn.ts.classification.fcn_baseline import FCNNaccBaseline
 # from nn.arch.transformer.TransformerDataset import TransformerDataset, generate_square_subsequent_mask
-from tools import unzip
+from tools import unzip, safe_div, argminby, argmaxby
 from nn.arch.lstm_vae import *
 import torch.nn.functional as F
 from nn.ts.classification import LinearBaseline, FCNBaseline, InceptionModel, ResNetBaseline
@@ -65,9 +68,15 @@ df = load_frame('AAPL')[['open', 'high', 'low', 'close']]
 df['delta_pct'] = df['close'].pct_change()
 data = df.to_numpy()[1:]
 
+# p, l = count_classes(data)
+# print(f'Loaded dataset contains {p} P-samples, and {l} L-samples')
+# data_range, data[:, :-1] = rescale(data[:, :-1])
+# p, l = count_classes(data)
+# print(f'Loaded dataset contains {p} P-samples, and {l} L-samples')
+
 num_input_channels = 4
 num_predicted_classes = 2 #* (P prob, L prob)
-in_seq_len = 7
+in_seq_len = 28
 out_seq_len = 1
 
 hidden_sizes = [
@@ -88,13 +97,12 @@ Xnp, ynp = np.asanyarray(Xl), np.asanyarray(yl).squeeze(1)
 print(Xnp.shape, ynp.shape)
 ynp = ynp
 ynp:ndarray = pl_binary_labeling(ynp[:, 3])
-
+print(ynp)
 Xnp, ynp = Xnp, ynp
 
 X, y = torch.from_numpy(Xnp), torch.from_numpy(ynp)
 X, y = X.float(), y.float()
 X, y = shuffle_tensors_in_unison(X, y)
-X = norm_batches(X)
 
 randsampling = torch.randint(0, len(X), (2000,))
 X = X.swapaxes(1, 2)
@@ -108,7 +116,7 @@ X, y = X[:-spliti], y[:-spliti]
 X_test, X, y_test, y = X, X_test, y, y_test
 print(X.shape, y.shape)
 
-max_epochs = 15
+max_epochs = 80
 
 from tqdm import tqdm
 from nn.optim import ScheduledOptim, Checkpoints
@@ -116,13 +124,21 @@ from nn.optim import ScheduledOptim, Checkpoints
 def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=None, lr=0.001, epochs=None):
    # model = LinearBaseline(in_seq_len, num_pred_classes=num_predicted_classes)
    assert criterion is not None
+   epochs = epochs if epochs is not None else max_epochs
+   
+   inner_optimizer = torch.optim.Adam(model.parameters(), lr=lr)
    optimizer = Checkpoints(
       model,
-      ScheduledOptim(torch.optim.Adam(model.parameters(), lr=lr), lr_init=lr, n_warmup_steps=5)
+      inner_optimizer
+      # ScheduledOptim(
+      #    inner_optimizer, 
+      #    lr_init=lr, 
+      #    n_warmup_steps=20
+      # )
    )
    crit = criterion
 
-   fit_iter = tqdm(range(epochs if epochs is not None else max_epochs))
+   fit_iter = tqdm(range(epochs))
    metric_logs = OrderedDict()
    
    for e in fit_iter:
@@ -130,7 +146,7 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       
       y_pred = model(X)
       
-      loss = crit(y, y_pred)
+      loss = crit(y, y_pred.squeeze())
       loss.backward()
       
       fit_iter.set_description(f'epoch {e}')
@@ -148,62 +164,96 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       
    return DataFrame.from_records(list(metric_logs.values())), model
 
-def evaluate(m: Module, X, y):
-   y_eval = m(X)
+def snapto(x: Tensor):
+   x = x.clone()
+   # print(1, x[:10], x[:-10])
    
-   y_labels = torch.argmax(y, 1)
-   y_pred_labels = torch.argmax(y_eval, 1)
-   accuracy = ((y_labels == y_pred_labels).int().count_nonzero() / len(y_labels))*100.0
+   x[x < 0.45] = -1
+   # print(2, x[:10], x[:-10])
+   x[x > 0.6] = 1
+   # print(3, x[:10], x[:-10])
+   x[x > 0.45] = 0
+   # print(4, x[:10], x[:-10])
+   return x
+
+def evaluate(m: Module, X:Tensor, y:Tensor):
+   y_eval = m(X)
+   assert (y.shape == y_eval.squeeze().shape)
+   
+   count = lambda *bool_exprs: reduce(torch.logical_and, bool_exprs).int().count_nonzero().item()
+   
+   labels = y.argmax(dim=1)
+   pred_labels = y_eval.argmax(dim=1)
+   q_p = (labels == 1)
+   q_l = (labels == 0)
+   matched = (pred_labels == labels)
+   
+   n_p, n_l = count(q_p), count(q_l)
+   n_matched, n_correct_p, n_correct_l = (
+      count(matched),
+      count(matched, q_p),
+      count(matched, q_l)
+   )
+   
+   n_false_p, n_false_l = (
+      count(torch.logical_not(matched), pred_labels == 1),
+      count(torch.logical_not(matched), pred_labels == 0)
+   )
+
+   accuracy = safe_div(n_correct_p + n_correct_l, n_p + n_l) * 100
    
    # print('accuracy=%f' % accuracy.item())
-   return accuracy.item()
+   
+   # print(f'{n_correct_p}/{n_p} P-samples')
+   # print(f'{n_correct_l}{n_l} L-samples')
+   
+   return accuracy
 
 
-core_kw = dict(in_channels=num_input_channels, num_pred_classes=3)
-
-# winner = Sequential(
-#    Dropout(p=0.2),
-#    FCNBaseline(**core_kw),
-#    ReLU()
-# )
-
-# hist, winner = fit(winner, X, y, MSELoss(), eval_X=X_test, eval_y=y_test, lr=0.001, epochs=200)
-
-# print('APEX.accuracy  =  ', evaluate(winner, X_test, y_test))
-# input()
+core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
 
 model_cores = [
    ResNetBaseline,
    FCNBaseline,
+   # FCNNaccBaseline,
 ]
+
 rates = [
-   0.00001,
-   0.0001,
-   0.0002,
-   0.001
+   0.0005,
+   0.00015,
+   0.001,
 ]
+
+losses = [
+   BCEWithLogitsLoss
+]
+
+import random
+combos = list(itertools.product(model_cores, rates, losses))
 
 model_variants = (
    (
       base_factory,
       rate,
+      crit_factory(),
       Sequential(
-         Dropout(p=0.15),
          base_factory(**core_kw),
-         ReLU()
+         Sigmoid()
       )
    )
    
-   for (base_factory, rate) in itertools.product(model_cores, rates)
+   for (base_factory, rate, crit_factory) in combos
 )
 
 experiments:List[Tuple[float, Module]] = []
-for base_ctor, learn_rate, model in model_variants:
-   hist, _ = fit(model, X, y, criterion=MSELoss(), eval_X=X_test, eval_y=y_test, lr=learn_rate)
-   score = evaluate(model, X_test, y_test)
-   # hist = pd.DataFrame.from_records(list(hist.values()))
 
-   print(f'baseline="{base_ctor.__qualname__}", learn_rate={learn_rate}')
+for mventry in model_variants:
+   base_ctor, learn_rate, criterion, model = mventry
+   
+   hist, _ = fit(model, X, y, criterion=criterion, eval_X=X_test, eval_y=y_test, lr=learn_rate)
+   score = evaluate(model, X_test, y_test)
+
+   print(f'baseline="{base_ctor.__qualname__}", learn_rate={learn_rate}, loss_fn={criterion}')
    print('final accuracy score:', score)
    
    experiments.append((score, model))
@@ -212,7 +262,11 @@ for base_ctor, learn_rate, model in model_variants:
 best_loop = reduce(lambda x, y: x if x[0] > y[0] else y, experiments)
 score, model = best_loop
 
-torch.save(model, './classifier_pretrained')
-
+torch.save(model.state_dict(), './classifier_pretrained_state')
 accuracy = evaluate(model, X_test, y_test)
+
+# model:ScriptModule = script(model.eval())
+
+# model.save('./classifier_pretrained.pt')
+
 print('accuracy score for saved model:', accuracy)

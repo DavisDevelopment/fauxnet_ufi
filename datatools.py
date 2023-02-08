@@ -425,25 +425,24 @@ def percent_change(arr):
    return result
 
 def pl_binary_labeling(y: ndarray):
-   labels = np.zeros((len(y), 3))
+   labels = np.zeros((len(y), 2))
    
    ydelta = percent_change(y)
-   thresh = 0.5
+   thresh = 0.8
    
    E = np.argwhere((ydelta <= thresh)&(ydelta >= -thresh))
-   P = np.argwhere(ydelta > 2)
-   L = np.argwhere(ydelta < -2)
+   P = np.argwhere(ydelta > thresh)
+   L = np.argwhere(ydelta < -thresh)
    
-   labels[E, 0] = 1 # horizontal (0)
-   labels[L, 1] = 1 # loss (1)
-   labels[P, 2] = 1 # profit (2)
+   labels[L, 0] = 1.0 # loss (-1)
+   labels[P, 1] = 1.0 # profit (1)
    
    return labels
 
 from torch import Tensor
 from torch.autograd import Variable
 
-def rescale(x:Tensor, new_min=0.0, new_max=1.0):
+def rescale(x, new_min=0.0, new_max=1.0):
    old_range = (x.min(), x.max())
    return old_range, renormalize(x, old_range, (new_min, new_max))
 
