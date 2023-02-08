@@ -1,5 +1,6 @@
 
 import itertools
+from functools import reduce
 import pickle
 from time import sleep
 
@@ -11,9 +12,10 @@ from datatools import ohlc_resample, pl_binary_labeling, renormalize, unpack
    
 from nn.namlp import NacMlp
 from cytoolz import *
+from cytoolz import itertoolz as iters
 import pandas as pd
 
-from datatools import get_cache, calc_Xy, load_ts_dump
+from datatools import get_cache, calc_Xy, load_ts_dump, rescale, norm_batches
 from nn.data.core import TwoPaneWindow, TensorBuffer
 from pandas import DataFrame
 from typing import *
@@ -23,7 +25,6 @@ from nn.arch.lstm_vae import *
 import torch.nn.functional as F
 from nn.ts.classification import LinearBaseline, FCNBaseline, InceptionModel, ResNetBaseline
 from nn.arch.transformer.TransformerDataset import generate_square_subsequent_mask
-
 
 def list_stonks(stonk_dir='./stonks'):
    from pathlib import Path
@@ -56,18 +57,7 @@ def shuffle_tensors_in_unison(*all, axis:int=0):
       results.append(a[(*accessor, torch.randperm(a.size()[axis]))])
    return tuple(results)
 
-def rescale(x:Tensor, new_min=0.0, new_max=1.0):
-   old_range = (x.min(), x.max())
-   return old_range, renormalize(x, old_range, (new_min, new_max))
 
-def norm_batches(x: Tensor):
-   with torch.no_grad():
-      res = Variable(torch.zeros_like(x))
-      for i in range(x.size(0)):
-         batch = x[i]
-         _, scaled_batch = rescale(batch, 0.0, 1.0)
-         res[i] = scaled_batch
-      return res
    
 symbols = list_stonks()
 
@@ -104,7 +94,7 @@ Xnp, ynp = Xnp, ynp
 X, y = torch.from_numpy(Xnp), torch.from_numpy(ynp)
 X, y = X.float(), y.float()
 X, y = shuffle_tensors_in_unison(X, y)
-# X = norm_batches(X)
+X = norm_batches(X)
 
 randsampling = torch.randint(0, len(X), (2000,))
 X = X.swapaxes(1, 2)
@@ -118,7 +108,7 @@ X, y = X[:-spliti], y[:-spliti]
 X_test, X, y_test, y = X, X_test, y, y_test
 print(X.shape, y.shape)
 
-max_epochs = 25
+max_epochs = 15
 
 from tqdm import tqdm
 from nn.optim import ScheduledOptim, Checkpoints
@@ -128,7 +118,7 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
    assert criterion is not None
    optimizer = Checkpoints(
       model,
-      ScheduledOptim(torch.optim.Adam(model.parameters(), lr=lr), 0.035, 4, 5)
+      ScheduledOptim(torch.optim.Adam(model.parameters(), lr=lr), lr_init=lr, n_warmup_steps=5)
    )
    crit = criterion
 
@@ -207,7 +197,7 @@ model_variants = (
    for (base_factory, rate) in itertools.product(model_cores, rates)
 )
 
-experiments = []
+experiments:List[Tuple[float, Module]] = []
 for base_ctor, learn_rate, model in model_variants:
    hist, _ = fit(model, X, y, criterion=MSELoss(), eval_X=X_test, eval_y=y_test, lr=learn_rate)
    score = evaluate(model, X_test, y_test)
@@ -216,5 +206,13 @@ for base_ctor, learn_rate, model in model_variants:
    print(f'baseline="{base_ctor.__qualname__}", learn_rate={learn_rate}')
    print('final accuracy score:', score)
    
-   experiments.append((score, base_ctor))
+   experiments.append((score, model))
    print(hist.sort_values(by='accuracy', ascending=False))
+
+best_loop = reduce(lambda x, y: x if x[0] > y[0] else y, experiments)
+score, model = best_loop
+
+torch.save(model, './classifier_pretrained')
+
+accuracy = evaluate(model, X_test, y_test)
+print('accuracy score for saved model:', accuracy)

@@ -5,10 +5,10 @@ import torch
 class ScheduledOptim():
     '''A simple wrapper class for learning rate scheduling'''
 
-    def __init__(self, optimizer, lr_mul, d_model, n_warmup_steps):
+    def __init__(self, optimizer, lr_init=0.0001, n_warmup_steps=5):
         self._optimizer = optimizer
-        self.lr_mul = lr_mul
-        self.d_model = d_model
+        self.lr_init = lr_init
+        self.lr = lr_init
         self.n_warmup_steps = n_warmup_steps
         self.n_steps = 0
 
@@ -27,10 +27,16 @@ class ScheduledOptim():
 
 
     def _get_lr_scale(self):
-        d_model = self.d_model
+      #   d_model = self.d_model
         n_steps, n_warmup_steps = self.n_steps, self.n_warmup_steps
+        lr_init = self.lr_init
+        
         if n_steps <= n_warmup_steps:
            return 1.0
+        
+        else:
+           coeff = (n_steps - n_warmup_steps) * 0.01
+           return self.lr
         return (1 / ((n_steps - n_warmup_steps) / n_warmup_steps))
         return (d_model ** -0.5) * min(n_steps ** (-0.5), n_steps * n_warmup_steps ** (-1.5))
 
@@ -39,10 +45,10 @@ class ScheduledOptim():
         ''' Learning rate scheduling per step '''
 
         self.n_steps += 1
-        lrscale = self._get_lr_scale()
-        lr = self.lr_mul * lrscale
-        print('lr_scale = %f' % lrscale)
-        print('new lr = %f' % lr)
+        
+      #   lrscale = self._get_lr_scale()
+        lr = self.lr - (self.lr * 0.0025)
+        self.lr = lr
 
         for param_group in self._optimizer.param_groups:
             param_group['lr'] = lr

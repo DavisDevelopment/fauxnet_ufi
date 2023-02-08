@@ -428,17 +428,30 @@ def pl_binary_labeling(y: ndarray):
    labels = np.zeros((len(y), 3))
    
    ydelta = percent_change(y)
-   print(ydelta[:10])
    thresh = 0.5
    
    E = np.argwhere((ydelta <= thresh)&(ydelta >= -thresh))
    P = np.argwhere(ydelta > 2)
    L = np.argwhere(ydelta < -2)
    
-   labels[E, 0] = 1
-   labels[L, 1] = 1
-   labels[P, 2] = 1
-   
-   print(labels[:10])
+   labels[E, 0] = 1 # horizontal (0)
+   labels[L, 1] = 1 # loss (1)
+   labels[P, 2] = 1 # profit (2)
    
    return labels
+
+from torch import Tensor
+from torch.autograd import Variable
+
+def rescale(x:Tensor, new_min=0.0, new_max=1.0):
+   old_range = (x.min(), x.max())
+   return old_range, renormalize(x, old_range, (new_min, new_max))
+
+def norm_batches(x: Tensor):
+   with torch.no_grad():
+      res = Variable(torch.zeros_like(x))
+      for i in range(x.size(0)):
+         batch = x[i]
+         _, scaled_batch = rescale(batch, 0.0, 1.0)
+         res[i] = scaled_batch
+      return res
