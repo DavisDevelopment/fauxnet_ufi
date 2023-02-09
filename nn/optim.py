@@ -20,7 +20,6 @@ class ScheduledOptim():
         self._update_learning_rate()
         self._optimizer.step()
 
-
     def zero_grad(self):
         "Zero out the gradients with the inner optimizer"
         self._optimizer.zero_grad()
@@ -40,18 +39,25 @@ class ScheduledOptim():
         return (1 / ((n_steps - n_warmup_steps) / n_warmup_steps))
         return (d_model ** -0.5) * min(n_steps ** (-0.5), n_steps * n_warmup_steps ** (-1.5))
 
+    @property
+    def lr(self):
+      return self._lr
+   
+    @lr.setter
+    def lr(self, lr:float):
+      self._lr = lr
+      for param_group in self._optimizer.param_groups:
+         param_group['lr'] = lr
 
     def _update_learning_rate(self):
         ''' Learning rate scheduling per step '''
 
         self.n_steps += 1
-        
-      #   lrscale = self._get_lr_scale()
-        lr = self.lr - (self.lr * 0.0025)
-        self.lr = lr
+        if self.n_steps > self.n_warmup_steps and (self.n_steps - self.n_warmup_steps % 5 == 0):
+           lr = self.lr / 2
+           self.lr = lr
 
-        for param_group in self._optimizer.param_groups:
-            param_group['lr'] = lr
+        
             
 import sys, os, shutil
 P = os.path

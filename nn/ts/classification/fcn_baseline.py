@@ -30,16 +30,23 @@ class FCNBaseline(nn.Module):
         }
 
         self.layers = nn.Sequential(*[
-            # ConvBlock(in_channels, 128, 8, 1),
-            ConvBlock(in_channels, 1024, 7, 1),
-            ConvBlock(1024, 512, 3, 1),
+            ConvBlock(in_channels, 768, 5, 1),
+            ConvBlock(768, 256, 4, 1),
+            ConvBlock(256, 128, 3, 1)
         ])
         
-        self.final = nn.Linear(512, num_pred_classes)
+        self.final = nn.Linear(128, num_pred_classes)
+        
+        self.activation = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
         x = self.layers(x)
-        return self.final(x.mean(dim=-1))
+        x = self.activation(x)
+        
+        x = x.mean(dim=-1)
+        x = self.final(x)
+        
+        return x
 
 from nn.nac import NeuralAccumulatorCell
 from nn.nalu import NeuralArithmeticLogicUnit
@@ -61,8 +68,8 @@ class FCNNaccBaseline(nn.Module):
         ]))
         
         self.nacc_decode = VecMap(nn.Sequential(
-            NeuralArithmeticLogicUnitCell(128, 128),
-            NeuralArithmeticLogicUnitCell(128, 16),
+            NeuralArithmeticLogicUnitCell(128, 32),
+            NeuralArithmeticLogicUnitCell(32, 16),
             # NeuralArithmeticLogicUnitCell(5, num_pred_classes),
         ), output_shape=(None, 16))
         
@@ -85,7 +92,6 @@ class FCNNaccBaseline(nn.Module):
             
             y = self.final(_x)
             
-            print(i, y.shape)
             outputs[i, :] = y
         
         return outputs

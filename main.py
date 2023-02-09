@@ -122,7 +122,7 @@ X, y = X[:-spliti], y[:-spliti]
 X_test, X, y_test, y = X, X_test, y, y_test
 print(X.shape, y.shape)
 
-max_epochs = 10
+max_epochs = 400
 
 from tqdm import tqdm
 from nn.optim import ScheduledOptim, Checkpoints
@@ -162,7 +162,7 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       
       if not (eval_X is None or eval_y is None):
          eval_metrics = evaluate(model, eval_X, eval_y)
-         le['metrics'] = tuple(f'{n:.2f}' for n in (eval_metrics.false_positives, eval_metrics.p, eval_metrics.l))
+         le['metrics'] = tuple(f'{n:.2f}' for n in (eval_metrics.p, eval_metrics.l, eval_metrics.false_positives))
          le['accuracy'] = eval_metrics.score
          fit_iter.set_postfix(le)
 
@@ -232,20 +232,19 @@ def evaluate(m: Module, X:Tensor, y:Tensor):
 core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
 
 model_cores = [
-   # ResNetBaseline,
+   ResNetBaseline,
    FCNBaseline,
    # FCNNaccBaseline,
 ]
 
 rates = [
-   0.0005,
+   0.00005,
    0.00015,
-   # 0.001,
+   0.0001,
 ]
 
 losses = [
-   BCEWithLogitsLoss,
-   # MSELoss,
+   BCEWithLogitsLoss
 ]
 
 import random
@@ -257,10 +256,7 @@ model_variants = (
       rate,
       crit_factory(),
       Sequential(
-         base_factory(**core_kw),
-         # LogSoftmax(dim=-1)
-         # ReLU()
-         Softmax()
+         base_factory(**core_kw)
       )
    )
    
@@ -271,11 +267,16 @@ experiments:List[Dict[str, Any]] = []
 
 for mventry in model_variants:
    base_ctor, learn_rate, criterion, model = mventry
-   
+   model:Sequential = model
    hist, _ = fit(model, X, y, criterion=criterion, eval_X=X_test, eval_y=y_test, lr=learn_rate)
    metrics = evaluate(model, X_test, y_test)
 
-   print(f'baseline="{base_ctor.__qualname__}", learn_rate={learn_rate}, loss_fn={criterion}')
+   print('\n'.join([
+      f'baseline="{base_ctor.__qualname__}"', 
+      f'learn_rate={learn_rate}', 
+      f'loss_fn={criterion}'
+      # f'activation={activfn}'
+   ]))
    print('final accuracy score:', metrics.score)
    
    experiments.append(dict(
