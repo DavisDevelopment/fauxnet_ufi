@@ -122,7 +122,7 @@ X, y = X[:-spliti], y[:-spliti]
 X_test, X, y_test, y = X, X_test, y, y_test
 print(X.shape, y.shape)
 
-max_epochs = 400
+max_epochs = 30
 
 from tqdm import tqdm
 from nn.optim import ScheduledOptim, Checkpoints
@@ -135,7 +135,8 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
    inner_optimizer = torch.optim.Adam(model.parameters(), lr=lr)
    optimizer = Checkpoints(
       model,
-      inner_optimizer
+      inner_optimizer,
+
       # ScheduledOptim(
       #    inner_optimizer, 
       #    lr_init=lr, 
@@ -158,19 +159,23 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       
       fit_iter.set_description(f'epoch {e}')
       
-      le = metric_logs[e] = dict(epoch=e, loss=loss.detach().item(), accuracy=None)
+      le = metric_logs[e] = Struct(epoch=e, loss=loss.detach().item(), accuracy=None)
       
       if not (eval_X is None or eval_y is None):
          eval_metrics = evaluate(model, eval_X, eval_y)
-         le['metrics'] = tuple(f'{n:.2f}' for n in (eval_metrics.p, eval_metrics.l, eval_metrics.false_positives))
-         le['accuracy'] = eval_metrics.score
+         le.metrics = tuple(f'{n:.2f}' for n in (eval_metrics.p, eval_metrics.l, eval_metrics.false_positives)) #type: ignore
+         le.n_pos_ids_P = eval_metrics.p #type: ignore
+         le.n_pos_ids_L = eval_metrics.l #type: ignore
+         le.total_neg_ids = eval_metrics.false_positives #type: ignore
+         le.accuracy = eval_metrics.score #type: ignore
+         le = le.asdict()
          fit_iter.set_postfix(le)
 
-      optimizer.step(le)
+      optimizer.step(le) #type: ignore
       
-   model = optimizer.close()
+   history, model = optimizer.close() #type: ignore
       
-   return DataFrame.from_records(list(metric_logs.values())), model
+   return history, model
 
 def snapto(x: Tensor):
    x = x.clone()
@@ -269,7 +274,8 @@ for mventry in model_variants:
    base_ctor, learn_rate, criterion, model = mventry
    model:Sequential = model
    hist, _ = fit(model, X, y, criterion=criterion, eval_X=X_test, eval_y=y_test, lr=learn_rate)
-   metrics = evaluate(model, X_test, y_test)
+   metrics:Struct = evaluate(model, X_test, y_test)
+   hist:DataFrame
 
    print('\n'.join([
       f'baseline="{base_ctor.__qualname__}"', 
@@ -277,12 +283,13 @@ for mventry in model_variants:
       f'loss_fn={criterion}'
       # f'activation={activfn}'
    ]))
-   print('final accuracy score:', metrics.score)
+   print('final accuracy score:', metrics.score)#type: ignore
    
    experiments.append(dict(
       **metrics.asdict(),
       model=model, 
-      config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__)
+      config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__),
+      logs=hist
    ))
    
    print(hist.sort_values(by='accuracy', ascending=False))

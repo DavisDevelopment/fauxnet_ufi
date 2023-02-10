@@ -1,6 +1,10 @@
 '''A wrapper class for scheduled optimizer '''
+from pprint import pprint
 import numpy as np
 import torch
+
+import pandas as pd
+from pandas import DataFrame, Series
 
 class ScheduledOptim():
     '''A simple wrapper class for learning rate scheduling'''
@@ -62,19 +66,27 @@ class ScheduledOptim():
 import sys, os, shutil
 P = os.path
 from typing import *
+
+from functools import *
+from cytoolz import *
+from cytoolz.itertoolz import nth
+from tools import maxby
             
 class Checkpoints():
-   def __init__(self, model, optimizer, chkpt_dir='./.model_checkpoints/'):
+   def __init__(self, model, optimizer, chkpt_dir='./.model_checkpoints/', n_warmup_steps=0):
        self.model = model
        self.optimizer = optimizer
        self.dir = chkpt_dir
        self.fn_template = P.join(self.dir, 'checkpoint_e%d.pth')
-       self.n_warmup_steps = 10
+       self.n_warmup_steps = n_warmup_steps
        self._best_key = 'accuracy'
        
        self.n_steps = 0
        self._best_score = None
        self._best_step = None
+       
+       self._logs = []
+       self.history = None
        
    def zero_grad(self):
       self.optimizer.zero_grad()
@@ -93,22 +105,35 @@ class Checkpoints():
       chkpt_file_path = (self.fn_template % (self.n_steps + 1))
       torch.save(self.model.state_dict(), chkpt_file_path)
       
-   def restore_best_checkpoint(self):
-      if self._best_step is not None:
-         best_state = torch.load(self.fn_template % (self._best_step + 1))
-         self.model.load_state_dict(best_state)
-         return self.model
+   def pick_best_checkpoint(self, history:DataFrame):
+      def key(row):
+         pprint(row)
+         return (row.n_pos_ids_P + row.n_pos_ids_L) - row.total_neg_ids
       
-      raise ValueError('No steps recorded to restore')
-   
+      logrows = history.itertuples(index=True, name='LogRow')
+      best_row = maxby(logrows, key)
+      
+      
+            
+   def restore_best_checkpoint(self):
+      history:DataFrame = DataFrame.from_records(self._logs)
+      best_step = self.pick_best_checkpoint(history)
+      
+      self.history = history
+      
+      if best_step is not None:
+         best_state = torch.load(self.fn_template % (best_step.epoch + 1))
+         
+         self.model.load_state_dict(best_state)
+         
+      return self.model
+      
    def step(self, metrics:Dict[str, Any]={}):
       assert self._best_key in metrics, f'no "{self._best_key}" metric listed'
-      score = metrics[self._best_key]
+      
+      self._logs.append(metrics)
+      
       if self.n_steps > self.n_warmup_steps:
-         if self._best_score is None or score > self._best_score:
-            self._best_score = score
-            self._best_step = self.n_steps
-         
          self.save_checkpoint()
       
       self.optimizer.step()
@@ -124,4 +149,4 @@ class Checkpoints():
       self._best_score = None
       self._best_step = None
       
-      return apex
+      return self.history, apex
