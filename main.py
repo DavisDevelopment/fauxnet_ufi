@@ -221,10 +221,10 @@ def evaluate(m: Module, X:Tensor, y:Tensor):
 
    accuracy = safe_div(n_correct_p + n_correct_l, n_p + n_l) * 100
    
-   # print('accuracy=%f' % accuracy.item())
+   pct_pos_p = safe_div(n_correct_p, n_p)
+   pct_pos_l = safe_div(n_correct_l, n_l)
    
-   # print(f'{n_correct_p}/{n_p} P-samples')
-   # print(f'{n_correct_l}{n_l} L-samples')
+   accuracy = (pct_pos_p + pct_pos_l) - misids
    
    return Struct(
       score=accuracy,
@@ -285,14 +285,19 @@ for mventry in model_variants:
    ]))
    print('final accuracy score:', metrics.score)#type: ignore
    
-   experiments.append(dict(
-      **metrics.asdict(),
-      model=model, 
-      config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__),
-      logs=hist
-   ))
+   
    
    print(hist.sort_values(by='accuracy', ascending=False))
+   from coinflip_backtest import backtest
+   
+   trading_perf = backtest(stock='AAPL', model=model)
+   
+   experiments.append(dict(
+      model=model, 
+      config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__),
+      score=trading_perf.roi,
+      logs=hist
+   ))
 
 best_loop = maxby(experiments, key=lambda e: e['score'])
 score, model, config = gets(best_loop, 'score', 'model', 'config')
@@ -304,3 +309,5 @@ torch.save(model, './classifier_pretrained.pt')
 accuracy = evaluate(model, X_test, y_test)
 
 pprint(config)
+
+print('accuracy of final exported model is ', accuracy)

@@ -12,7 +12,7 @@ from numpy import ndarray
 from nn.data.core import TwoPaneWindow
 
 from torch import Tensor, from_numpy, tensor
-from tools import unzip
+from tools import Struct, unzip
 
 from sklearn.preprocessing import MinMaxScaler
 from typing import *
@@ -61,9 +61,9 @@ def count_classes(y: ndarray):
    
    return len(P), len(L)
 
-def run_backtest(model, df:pd.DataFrame):
+def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0):
    steps = []
-   dollars = 50.0
+   dollars = init_balance
    dollars_init = dollars
    holdings = 0.0
    logs = []
@@ -121,32 +121,36 @@ def run_backtest(model, df:pd.DataFrame):
    
    return logs, balances
 
-if __name__ == '__main__':
-   stock = load_dataframe('AAPL', './stonks', format='feather')[['open', 'high', 'low', 'close']]
-   print(stock)
+# if __name__ == '__main__':
+def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None):
+   if isinstance(stock, str):
+      stock = load_dataframe(str(stock), './stonks', format='feather')[['open', 'high', 'low', 'close']]
+   else:
+      pass
+   # print(stock)
 
-   model_state = torch.load('./classifier_pretrained_state')
+   if model is None:
+      model_state = torch.load('./classifier_pretrained_state')
+      model = torch.load('./classifier_pretrained.pt')
+      model.load_state_dict(model_state)
+      print(model)
    
-   model = torch.load('./classifier_pretrained.pt')
-   print(model)
-   
-   model.load_state_dict(model_state)
-
-   logs, balances = run_backtest(model, stock)
+   bal_init = 100.0
+   logs, balances = run_backtest(model, stock, init_balance=bal_init)
    blogs = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
    blogs = blogs.set_index('datetime', drop=True)
    
-   blogs.to_pickle('.latest_backtest_log.pickle')
-   print(blogs)
+   # blogs.to_pickle('.latest_backtest_log.pickle')
+   # print(blogs)
    
    bals:pd.Series = blogs.balance
+   bal_final = bals.iloc[-1]
    rois = bals.diff().iloc[1:]
    
    P = rois[rois > 0].mean()
    L = rois[rois < 0].abs().mean()
-   print('p/l ratio is ', (P / L))
+   pl_ratio = (P / L)
+   final_roi = (bal_final / bal_init)
+   # print('p/l ratio is ', (P / L))
    
-   # bals.plot(figsize=(60, 20))
-   
-   import matplotlib.pyplot as plt
-   # plt.show()
+   return Struct(pl_ratio=pl_ratio, roi=final_roi)
