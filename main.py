@@ -64,68 +64,10 @@ def shuffle_tensors_in_unison(*all, axis:int=0):
    
 symbols = list_stonks()
 
-df = load_frame('AAPL')[['open', 'high', 'low', 'close']]
-df['delta_pct'] = df['close'].pct_change()
-data = df.to_numpy()[1:]
-
-# p, l = count_classes(data)
-# print(f'Loaded dataset contains {p} P-samples, and {l} L-samples')
-# data_range, data[:, :-1] = rescale(data[:, :-1])
-# p, l = count_classes(data)
-# print(f'Loaded dataset contains {p} P-samples, and {l} L-samples')
-
-num_input_channels = 4
-num_predicted_classes = 2 #* (P prob, L prob)
-in_seq_len = 28
-out_seq_len = 1
-
-hidden_sizes = [
-   (in_seq_len * num_input_channels * 2),
-   (in_seq_len * num_input_channels),
-   (in_seq_len * num_input_channels // 2)
-]
-
-win = TwoPaneWindow(in_seq_len, out_seq_len)
-win.load(data)
-
-from sklearn.preprocessing import MinMaxScaler
-
-scaler = MinMaxScaler()
-scaler.fit(data[:, :-1])
-
-seq_pairs = list(win.iter(lfn=lambda x: scaler.transform(x[:, :-1])))
-Xl, yl = [list(_) for _ in unzip(seq_pairs)]
-Xnp:ndarray
-ynp:ndarray 
-Xnp, ynp = np.asanyarray(Xl), np.asanyarray(yl).squeeze(1)
-
-print(Xnp.shape, ynp.shape)
-ynp = ynp
-ynp:ndarray = pl_binary_labeling(ynp[:, 3])
-print(ynp)
-Xnp, ynp = Xnp, ynp
-
-X, y = torch.from_numpy(Xnp), torch.from_numpy(ynp)
-X, y = X.float(), y.float()
-X, y = shuffle_tensors_in_unison(X, y)
-
-
-randsampling = torch.randint(0, len(X), (2000,))
-X = X.swapaxes(1, 2)
-X, y = X[randsampling], y[randsampling]
-
-test_split = 0.4
-spliti = round(len(X) * test_split)
-X_test, y_test = X[-spliti:], y[-spliti:]
-X, y = X[:-spliti], y[:-spliti]
-
-X_test, X, y_test, y = X, X_test, y, y_test
-print(X.shape, y.shape)
-
-max_epochs = 30
-
 from tqdm import tqdm
 from nn.optim import ScheduledOptim, Checkpoints
+
+max_epochs = 100
 
 def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=None, lr=0.001, epochs=None):
    # model = LinearBaseline(in_seq_len, num_pred_classes=num_predicted_classes)
@@ -232,82 +174,222 @@ def evaluate(m: Module, X:Tensor, y:Tensor):
       l=safe_div(n_correct_l, n_l),
       false_positives=misids
    )
+   
+from dataclasses import dataclass
+
+@dataclass
+class ExperimentConfig:
+   in_seq_len:Optional[int] = None
+   out_seq_len:Optional[int] = 1
+   num_input_channels:Optional[int] = 4
+   input_channels:Optional[tuple] = ('open', 'high', 'low', 'close')
+   num_predicted_classes:Optional[int] = 2
+   
+   symbol:Optional[str] = None
+   df:Optional[DataFrame] = None
+   
+   shuffle:bool = True
+   val_split:float = 0.12
+   epochs:int = 30
+   
+   def __post_init__(self):
+      assert not (self.df is None and self.symbol is None), "either symbol name or a DataFrame must be provided"
+      assert self.in_seq_len is not None, "size of input sequence must be provided"
+      
+      if self.symbol is not None and self.df is None:
+         self.df = load_frame(self.symbol)
+         if self.input_channels is not None:
+            self.df = self.df[list(self.input_channels)]
+
+def shotgun_strategy(config:ExperimentConfig):
+   # df = load_frame('MSFT')[['open', 'high', 'low', 'close']]
+   df:DataFrame = config.df
+   df['delta_pct'] = df['close'].pct_change()
+   data = df.to_numpy()[1:]
+
+   num_input_channels, in_seq_len, out_seq_len = config.num_input_channels, config.in_seq_len, config.out_seq_len
+   assert None not in (in_seq_len, out_seq_len)
+   win = TwoPaneWindow(in_seq_len, out_seq_len) #type: ignore
+   win.load(data)
+
+   from sklearn.preprocessing import MinMaxScaler
+
+   scaler = MinMaxScaler()
+   scaler.fit(data[:, :-1])
+
+   seq_pairs = list(win.iter(lfn=lambda x: scaler.transform(x[:, :-1])))
+   Xl, yl = [list(_) for _ in unzip(seq_pairs)]
+   Xnp:ndarray
+   ynp:ndarray 
+   Xnp, ynp = np.asanyarray(Xl), np.asanyarray(yl).squeeze(1)
+
+   print(Xnp.shape, ynp.shape)
+   ynp = ynp
+   ynp:ndarray = pl_binary_labeling(ynp[:, 3])
+   print(ynp)
+   Xnp, ynp = Xnp, ynp
+
+   X, y = torch.from_numpy(Xnp), torch.from_numpy(ynp)
+   X, y = X.float(), y.float()
+   X, y = shuffle_tensors_in_unison(X, y)
 
 
-core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
+   randsampling = torch.randint(0, len(X), (2000,))
+   X = X.swapaxes(1, 2)
+   X, y = X[randsampling], y[randsampling]
 
-model_cores = [
-   ResNetBaseline,
-   FCNBaseline,
-   # FCNNaccBaseline,
-]
+   test_split = config.val_split
+   spliti = round(len(X) * test_split)
+   X_test, y_test = X[-spliti:], y[-spliti:]
+   X, y = X[:-spliti], y[:-spliti]
 
-rates = [
-   0.00005,
-   0.00015,
-   0.0001,
-]
+   X_test, X, y_test, y = X, X_test, y, y_test
+   print(X.shape, y.shape)
 
-losses = [
-   BCEWithLogitsLoss
-]
+   core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
 
-import random
-combos = list(itertools.product(model_cores, rates, losses))
+   model_cores = [
+      ResNetBaseline,
+      FCNBaseline,
+      # FCNNaccBaseline,
+   ]
 
-model_variants = (
-   (
-      base_factory,
-      rate,
-      crit_factory(),
-      Sequential(
-         base_factory(**core_kw)
+   rates = [
+      0.00005,
+      0.00015,
+      0.0001,
+   ]
+
+   losses = [
+      BCEWithLogitsLoss
+   ]
+
+   import random
+   combos = list(itertools.product(model_cores, rates, losses))
+
+   model_variants = (
+      (
+         base_factory,
+         rate,
+         crit_factory(),
+         Sequential(
+            base_factory(**core_kw)
+         )
       )
+      
+      for (base_factory, rate, crit_factory) in combos
    )
-   
-   for (base_factory, rate, crit_factory) in combos
-)
 
-experiments:List[Dict[str, Any]] = []
+   experiments:List[Dict[str, Any]] = []
 
-for mventry in model_variants:
-   base_ctor, learn_rate, criterion, model = mventry
-   model:Sequential = model
-   hist, _ = fit(model, X, y, criterion=criterion, eval_X=X_test, eval_y=y_test, lr=learn_rate)
-   metrics:Struct = evaluate(model, X_test, y_test)
-   hist:DataFrame
+   for mventry in model_variants:
+      base_ctor, learn_rate, criterion, model = mventry
+      model:Sequential = model
+      hist, _ = fit(model, X, y, criterion=criterion, eval_X=X_test, eval_y=y_test, lr=learn_rate, epochs=config.epochs)
+      metrics:Struct = evaluate(model, X_test, y_test)
+      hist:DataFrame
 
-   print('\n'.join([
-      f'baseline="{base_ctor.__qualname__}"', 
-      f'learn_rate={learn_rate}', 
-      f'loss_fn={criterion}'
-      # f'activation={activfn}'
-   ]))
-   print('final accuracy score:', metrics.score)#type: ignore
-   
-   
-   
-   print(hist.sort_values(by='accuracy', ascending=False))
+      print('\n'.join([
+         f'baseline="{base_ctor.__qualname__}"', 
+         f'learn_rate={learn_rate}', 
+         f'loss_fn={criterion}'
+         # f'activation={activfn}'
+      ]))
+      print('final accuracy score:', metrics.score)#type: ignore
+      
+      
+      
+      print(hist.sort_values(by='accuracy', ascending=False))
+      from coinflip_backtest import backtest
+      
+      trading_perf = backtest(stock=config.symbol, model=model)
+      
+      experiments.append(dict(
+         model=model,
+         model_state=model.state_dict(),
+         mdl_config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__),
+         exp_config=config,
+         score=trading_perf.roi,
+         logs=hist
+      ))
+
+   best_loop = maxby(experiments, key=lambda e: e['score'])
+   score, model, mdl_config = gets(best_loop, 'score', 'model', 'mdl_config')
+
+
+   #* save the best-qualified classifier
+   torch.save(model.state_dict(), './classifier_pretrained_state')
+   torch.save(model, './classifier_pretrained.pt')
+   accuracy = evaluate(model, X_test, y_test)
+
+   pprint(config)
+
+   print('accuracy of final exported model is ', accuracy)
+   return best_loop
+
+def generate_figures():
+   import matplotlib.pyplot as plt
    from coinflip_backtest import backtest
    
-   trading_perf = backtest(stock='AAPL', model=model)
+   winners = pickle.load(open('./experiment_winners.pickle', 'rb'))
+   for symbol, best_loop in winners.items():
+      print(best_loop.keys())
+      model:Module = best_loop['model']
+      model.load_state_dict(best_loop['model_state'])
+      
+      trade_sess = backtest(stock=symbol, model=model)
+      
+      pprint(dict(
+         symbol=symbol,
+         pl_ratio=trade_sess.pl_ratio,
+         roi=trade_sess.roi
+      ))
+      
+      logs:pd.Series = trade_sess.trade_logs #type: ignore
+      logs['datetime'] = logs.index
+      
+      logs.plot(
+         title=f'CoinFlipNet({symbol}) Trading Balance', 
+         x='datetime',
+         y=['close', 'balance'],
+         figsize=(24, 16), 
+         legend=True, 
+         stacked=True
+      )
+      
+      plt.savefig(f'./figures/{symbol}_coin_flip_net.png')
+      
+      plt.close('all')
+
+if __name__ == '__main__':
+   import sys 
+   argv = sys.argv[1:]
    
-   experiments.append(dict(
-      model=model, 
-      config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__),
-      score=trading_perf.roi,
-      logs=hist
-   ))
-
-best_loop = maxby(experiments, key=lambda e: e['score'])
-score, model, config = gets(best_loop, 'score', 'model', 'config')
-
-
-#* save the best-qualified classifier
-torch.save(model.state_dict(), './classifier_pretrained_state')
-torch.save(model, './classifier_pretrained.pt')
-accuracy = evaluate(model, X_test, y_test)
-
-pprint(config)
-
-print('accuracy of final exported model is ', accuracy)
+   if 'figures' in argv:
+      generate_figures()
+      exit()
+   
+   symbols = [
+      # 'MSFT', 'GOOG', 'GOOGL', 'TSLA', 'AAPL', 'SONY', 'INTC', 
+      'NVDA', 'AMD',
+      # 'NTDOY', 'HPE'     
+   ]
+   
+   winners = {}
+   for symbol in symbols:
+      try:
+         winners[symbol] = shotgun_strategy(ExperimentConfig(
+            in_seq_len=14,
+            symbol=symbol
+         ))
+      
+      except Exception as error:
+         pprint(error)
+         continue
+   
+   pickle.dump(winners, open('./experiment_winners.pickle', 'wb+'))
+   
+   for sym, best_row in winners.items():
+      print(f'Highest-Achieved ROI for [{sym.upper()}]  =  {best_row["score"]:,.2f}%')
+   
+   generate_figures()

@@ -124,10 +124,9 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0):
 # if __name__ == '__main__':
 def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None):
    if isinstance(stock, str):
-      stock = load_dataframe(str(stock), './stonks', format='feather')[['open', 'high', 'low', 'close']]
+      stock:pd.DataFrame = load_dataframe(str(stock), './stonks', format='feather')[['open', 'high', 'low', 'close']]
    else:
       pass
-   # print(stock)
 
    if model is None:
       model_state = torch.load('./classifier_pretrained_state')
@@ -140,8 +139,9 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None):
    blogs = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
    blogs = blogs.set_index('datetime', drop=True)
    
-   # blogs.to_pickle('.latest_backtest_log.pickle')
-   # print(blogs)
+   close = stock.loc[blogs.index]['close']
+   blogs['close'] = close
+   print(blogs)
    
    bals:pd.Series = blogs.balance
    bal_final = bals.iloc[-1]
@@ -151,6 +151,9 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None):
    L = rois[rois < 0].abs().mean()
    pl_ratio = (P / L)
    final_roi = (bal_final / bal_init)
-   # print('p/l ratio is ', (P / L))
    
-   return Struct(pl_ratio=pl_ratio, roi=final_roi)
+   return Struct(
+      pl_ratio=pl_ratio, 
+      roi=final_roi,
+      trade_logs=blogs
+   )
