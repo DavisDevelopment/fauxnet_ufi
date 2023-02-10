@@ -17,7 +17,6 @@ elit et justo ex eiusmod tempor incididunt ut labore et dolore mag nulore magna 
 ![GOOGL](figures/GOOGL_coin_flip_net.png)
 ![TSLA](figures/TSLA_coin_flip_net.png)
 ![AAPL](figures/AAPL_coin_flip_net.png)
-![SONY](figures/SONY_coin_flip_net.png)
 ![INTC](figures/INTC_coin_flip_net.png)
 ![NVDA](figures/NVDA_coin_flip_net.png)
 ![AMD](figures/AMD_coin_flip_net.png)
