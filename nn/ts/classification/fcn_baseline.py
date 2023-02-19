@@ -1,11 +1,11 @@
 import torch
-from torch import nn
+from torch import nn, zeros
 from torch.autograd import Variable
 from nn.common import VecMap
 
 from nn.nalu import NeuralArithmeticLogicUnit, NeuralArithmeticLogicUnitCell
 
-from .utils import ConvBlock
+from .utils import ConvBlock, ConvBlock2D
 
 
 class FCNBaseline(nn.Module):
@@ -28,10 +28,14 @@ class FCNBaseline(nn.Module):
             'in_channels': in_channels,
             'num_pred_classes': num_pred_classes
         }
+        
+        self.input_shape = (None, in_channels, None)
+        self.output_shape = (None, num_pred_classes)
 
         self.layers = nn.Sequential(*[
-            ConvBlock(in_channels, 768, 5, 1),
-            ConvBlock(768, 256, 4, 1),
+            ConvBlock(in_channels, 256, 5, 1),
+            ConvBlock(256, 256, 4, 1),
+            ConvBlock(256, 256, 4, 1),
             ConvBlock(256, 128, 3, 1)
         ])
         
@@ -40,10 +44,69 @@ class FCNBaseline(nn.Module):
         self.activation = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
+        input_shape = x.shape
+        batch_len, n_channels, seq_len = input_shape
+        assert x.ndim == len(self.input_shape)
+        
+        # y = Variable(zeros((batch_len, self.output_shape[1]), requires_grad=True))
+        
+        # for i in range(batch_len):
+        _x = x
+        _x = self.layers(_x)
+        _x = self.activation(_x)
+        _x = _x.mean(dim=-1)
+        _x = self.final(_x)
+        
+        # y[i] = _x
+    
+        return _x
+    
+class FCNBaseline2D(nn.Module):
+    """A PyTorch implementation of the FCN Baseline
+    From https://arxiv.org/abs/1909.04939
+
+    Attributes
+    ----------
+    sequence_length:
+        The size of the input sequence
+    num_pred_classes:
+        The number of output classes
+    """
+
+    def __init__(self, in_channels: int, num_pred_classes: int = 1) -> None:
+        super().__init__()
+
+        # for easier saving and loading
+        self.input_args = {
+            'in_channels': in_channels,
+            'num_pred_classes': num_pred_classes
+        }
+
+        self.layers = nn.Sequential(*[
+            ConvBlock2D(in_channels, 256, 5, 1),
+            ConvBlock2D(256, 256, 4, 1),
+            ConvBlock2D(256, 256, 4, 1),
+            ConvBlock2D(256, 128, 3, 1)
+        ])
+        
+        self.final = None#nn.Linear(800, num_pred_classes)
+        
+        self.activation = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
         x = self.layers(x)
         x = self.activation(x)
+        print(x.shape)
         
+        x = x.flatten(end_dim=1)
+        print(x.shape)
         x = x.mean(dim=-1)
+        print(x.shape)
+        x = x.mean(dim=-1)
+        print(x.shape)
+        if self.final is None:
+            self.final = nn.Linear(len(x), self.input_args['num_pred_classes'])
+        
         x = self.final(x)
         
         return x

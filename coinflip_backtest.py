@@ -29,27 +29,6 @@ def load_dataframe(symbol:str, dir='./', format='csv', **read_kwargs):
       df = df.set_index('datetime', drop=True)
    
    return df
-
-def get_model_inputs(df:pd.DataFrame, state_dict:Optional[Dict[str, Any]]=None):
-   df = df.copy()
-   data:ndarray = df.to_numpy()
-
-   scaler = MinMaxScaler()
-   scaler.fit(data)
-   
-   p, l = count_classes(data)
-   print(f'Loaded dataset contains {p} P-samples, and {l} L-samples')
-
-   #*TODO define ModelConfig class to pass around instead of duplicating these variables endless all around town
-   in_seq_len = 7
-   out_seq_len = 1
-   
-   for i in range(1+in_seq_len, len(data)-out_seq_len-1):
-      tstamp = df.index[i]
-      
-      X = from_numpy(scaler.transform(data[i-in_seq_len:i])).unsqueeze(0).float().swapaxes(1, 2)
-      
-      yield tstamp, X
       
 def count_classes(y: ndarray):
    ydelta = percent_change(y[:, 3])
@@ -61,18 +40,22 @@ def count_classes(y: ndarray):
    
    return len(P), len(L)
 
-def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0):
+pos_types = ('long', 'short', 'both')
+
+def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='long', on_sampler=None):
    steps = []
    dollars = init_balance
    dollars_init = dollars
+   
+   borrow_price = None
    holdings = 0.0
    logs = []
    balances = []
    
-   def liq(t):
+   def close_long(t):
       nonlocal holdings
       vol = holdings
-      if vol == 0: 
+      if vol == 0:
          return
       
       holdings = 0
@@ -83,37 +66,74 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0):
       
       logs.append(('S', t, vol, today.close))
    
-   def buy(t):
+   def open_long(t):
       today = df.loc[t]
       nonlocal holdings, dollars
       
       vol = (dollars / today.close)
-      holdings += vol
+      holdings = vol
       dollars -= (vol * today.close)
       logs.append(('B', t, vol, today.close))
-         
-   for time, X in get_model_inputs(df):
-      ypred = model(X).argmax()
       
-      liq(time)
+   def open_short(t):
+      today = df.loc[t]
+      nonlocal holdings, dollars, borrow_price
+      
+      borrow_price = today.close
+      vol = (dollars / borrow_price)
+      holdings = -vol
+      
+   def close_short(t):
+      today = df.loc[t]
+      nonlocal holdings, dollars, borrow_price
+      
+      buy_cost = borrow_price * (-holdings)
+      sell_cost = (-holdings) * today.close
+      profit = (buy_cost - sell_cost)
+      # print(f'closing SHORT position for ${profit:,.2f}')
+      
+      dollars += (buy_cost - sell_cost)
+      borrow_price = None
+      holdings = 0
+      
+      
+   # from nn.data.agg import *
+   from nn.data.sampler import DataFrameSampler
+   
+   sampler = DataFrameSampler(df)
+   if callable(on_sampler):
+      on_sampler(sampler)
+   
+         
+   for time, X in sampler.samples():
+      ypred:Tensor = model(X)
+      # print(type(ypred))
+      if ypred.ndim != 0:
+         ypred = ypred.argmax()
+      
+      if holdings > 0:
+         close_long(time)
+      elif holdings < 0:
+         close_short(time)
+      
       balances.append((time, dollars))
       
-      if ypred != 0:
-         pass
-      
-      if ypred == 1:
-         buy(time)
+      if ypred == 1: 
+         if pos_type in ('long', 'both'):
+            open_long(time)
                
       elif ypred == 0:
-         continue
+         if pos_type in ('short', 'both'):
+            open_short(time)
       
-      elif ypred == -1:
-         continue
-         
       else:
          raise Exception('Invalid value for ypred; Invalid class label')
       
-   liq(time)
+   if holdings > 0:
+      close_long(time)
+   elif holdings < 0:
+      close_short(time)
+   
    balances.append((time, dollars))
    
    return_on_investment = ((dollars / dollars_init) * 100)
@@ -122,25 +142,32 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0):
    return logs, balances
 
 # if __name__ == '__main__':
-def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None):
+def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None):
    if isinstance(stock, str):
       stock:pd.DataFrame = load_dataframe(str(stock), './stonks', format='feather')[['open', 'high', 'low', 'close']]
    else:
       pass
 
+   
    if model is None:
       model_state = torch.load('./classifier_pretrained_state')
       model = torch.load('./classifier_pretrained.pt')
       model.load_state_dict(model_state)
       print(model)
    
-   bal_init = 100.0
-   logs, balances = run_backtest(model, stock, init_balance=bal_init)
+   bal_init = stock.close.iloc[0]
+   logs, balances = run_backtest(model, stock, init_balance=bal_init, pos_type=pos_type)
    blogs = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
    blogs = blogs.set_index('datetime', drop=True)
    
    close = stock.loc[blogs.index]['close']
    blogs['close'] = close
+   
+   close_init = close.iloc[0]
+   close_final = close.iloc[-1]
+   baseline_roi = (close_final / close_init)
+   blogs['baseline_roi'] = (close / close_init)
+   blogs['roi'] = (blogs.balance / bal_init)
    print(blogs)
    
    bals:pd.Series = blogs.balance

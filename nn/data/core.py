@@ -158,7 +158,7 @@ from torch import Tensor, tensor, nn
 El = Union[Tensor, ndarray]
 
 class TensorBuffer:
-   def __init__(self, size:int, item_shape:Tuple[int, int], dtype=None) -> None:
+   def __init__(self, size:int, item_shape:tuple, dtype=None) -> None:
       self._capacity = size
       self.item_shape = item_shape
       self._pos = 0
@@ -178,8 +178,15 @@ class TensorBuffer:
       
    def push(self, el:ndarray):
       self.grow()
-      self.data[self._pos] = el
-      self._pos += 1
+      if el.ndim == len(self.item_shape):
+         self.data[self._pos] = el
+         self._pos += 1
+      
+      elif el.ndim == len(self.item_shape)+1:
+         for e in el:
+            self.push(e)
+      else:
+         raise ValueError(f'Expected {self.item_shape}, got {el.shape}')
       return self._pos
    
    def pop(self):

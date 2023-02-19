@@ -107,7 +107,6 @@ class Checkpoints():
       
    def pick_best_checkpoint(self, history:DataFrame):
       def key(row):
-         pprint(row)
          return (row.n_pos_ids_P + row.n_pos_ids_L) - row.total_neg_ids
       
       logrows = history.itertuples(index=True, name='LogRow')

@@ -33,6 +33,7 @@ class ResNetBaseline(nn.Module):
             ResNetBlock(in_channels=in_channels, out_channels=mid_channels),
             ResNetBlock(in_channels=mid_channels, out_channels=mid_channels * 2),
             ResNetBlock(in_channels=mid_channels * 2, out_channels=mid_channels * 2),
+            ResNetBlock(in_channels=mid_channels * 2, out_channels=mid_channels * 2),
 
         ])
         self.final = nn.Linear(mid_channels * 2, num_pred_classes)

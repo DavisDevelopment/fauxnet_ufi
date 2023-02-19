@@ -1,13 +1,13 @@
 
 import itertools
-from functools import reduce
+from functools import reduce, wraps
 import pickle
 from time import sleep
 from pprint import pprint
 from numpy import asanyarray, ndarray
 from torch import BoolTensor, random, renorm
 from torch.jit._script import ScriptModule, ScriptFunction
-from coinflip_backtest import count_classes
+from coinflip_backtest import backtest, count_classes
 from nn.arch.transformer.TimeSeriesTransformer import TimeSeriesTransformer
 from nn.common import *
 from datatools import P, ohlc_resample, pl_binary_labeling, renormalize, unpack
@@ -21,7 +21,7 @@ from datatools import get_cache, calc_Xy, load_ts_dump, rescale, norm_batches
 from nn.data.core import TwoPaneWindow, TensorBuffer
 from pandas import DataFrame
 from typing import *
-from nn.ts.classification.fcn_baseline import FCNNaccBaseline
+from nn.ts.classification.fcn_baseline import FCNBaseline2D, FCNNaccBaseline
 # from nn.arch.transformer.TransformerDataset import TransformerDataset, generate_square_subsequent_mask
 from tools import Struct, gets, maxby, unzip, safe_div, argminby, argmaxby
 from nn.arch.lstm_vae import *
@@ -29,13 +29,16 @@ import torch.nn.functional as F
 from nn.ts.classification import LinearBaseline, FCNBaseline, InceptionModel, ResNetBaseline
 from nn.arch.transformer.TransformerDataset import generate_square_subsequent_mask
 
+from sklearn.preprocessing import MinMaxScaler
+
 def list_stonks(stonk_dir='./stonks'):
    from pathlib import Path
-   return [str(n)[:-8] for n in Path(stonk_dir).rglob('*.feather')]
+   return [str(P.basename(n))[:-8] for n in Path(stonk_dir).rglob('*.feather')]
 
 def load_frame(sym:str):
    df:DataFrame = pd.read_feather('./stonks/%s.feather' % sym)
-   return df.set_index('datetime', drop=False)
+   
+   return df.fillna(method='ffill').fillna(method='bfill').dropna().set_index('datetime', drop=False)
 
 def shuffle_tensors_in_unison(*all, axis:int=0):
    state = torch.random.get_rng_state()
@@ -175,14 +178,15 @@ def evaluate(m: Module, X:Tensor, y:Tensor):
       false_positives=misids
    )
    
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+from cytoolz.dicttoolz import merge
 
 @dataclass
 class ExperimentConfig:
    in_seq_len:Optional[int] = None
    out_seq_len:Optional[int] = 1
    num_input_channels:Optional[int] = 4
-   input_channels:Optional[tuple] = ('open', 'high', 'low', 'close')
+   # input_channels:Optional[tuple] = ('open', 'high', 'low', 'close')
    num_predicted_classes:Optional[int] = 2
    
    symbol:Optional[str] = None
@@ -192,17 +196,24 @@ class ExperimentConfig:
    val_split:float = 0.12
    epochs:int = 30
    
+   X_train:Optional[Tensor] = None
+   y_train:Optional[Tensor] = None
+   X_test:Optional[Tensor] = None
+   y_test:Optional[Tensor] = None
+   
    def __post_init__(self):
-      assert not (self.df is None and self.symbol is None), "either symbol name or a DataFrame must be provided"
-      assert self.in_seq_len is not None, "size of input sequence must be provided"
+      # assert not (self.df is None and self.symbol is None), "either symbol name or a DataFrame must be provided"
+      # assert self.in_seq_len is not None, "size of input sequence must be provided"
       
       if self.symbol is not None and self.df is None:
          self.df = load_frame(self.symbol)
-         if self.input_channels is not None:
-            self.df = self.df[list(self.input_channels)]
-
-def shotgun_strategy(config:ExperimentConfig):
-   # df = load_frame('MSFT')[['open', 'high', 'low', 'close']]
+            
+   # @wraps(ExperimentConfig)
+   def extend(self, **params):
+      kw = merge(asdict(self), params)
+      return ExperimentConfig(**kw)
+            
+def prep_data_for(config:ExperimentConfig):
    df:DataFrame = config.df
    df['delta_pct'] = df['close'].pct_change()
    data = df.to_numpy()[1:]
@@ -212,10 +223,9 @@ def shotgun_strategy(config:ExperimentConfig):
    win = TwoPaneWindow(in_seq_len, out_seq_len) #type: ignore
    win.load(data)
 
-   from sklearn.preprocessing import MinMaxScaler
 
    scaler = MinMaxScaler()
-   scaler.fit(data[:, :-1])
+   scaler.fit(data[:, :])
 
    seq_pairs = list(win.iter(lfn=lambda x: scaler.transform(x[:, :-1])))
    Xl, yl = [list(_) for _ in unzip(seq_pairs)]
@@ -223,19 +233,16 @@ def shotgun_strategy(config:ExperimentConfig):
    ynp:ndarray 
    Xnp, ynp = np.asanyarray(Xl), np.asanyarray(yl).squeeze(1)
 
-   print(Xnp.shape, ynp.shape)
    ynp = ynp
    ynp:ndarray = pl_binary_labeling(ynp[:, 3])
-   print(ynp)
    Xnp, ynp = Xnp, ynp
 
    X, y = torch.from_numpy(Xnp), torch.from_numpy(ynp)
    X, y = X.float(), y.float()
    X, y = shuffle_tensors_in_unison(X, y)
 
-
-   randsampling = torch.randint(0, len(X), (2000,))
    X = X.swapaxes(1, 2)
+   randsampling = torch.randint(0, len(X), (len(X),))
    X, y = X[randsampling], y[randsampling]
 
    test_split = config.val_split
@@ -243,28 +250,40 @@ def shotgun_strategy(config:ExperimentConfig):
    X_test, y_test = X[-spliti:], y[-spliti:]
    X, y = X[:-spliti], y[:-spliti]
 
-   X_test, X, y_test, y = X, X_test, y, y_test
-   print(X.shape, y.shape)
+   X_test, X_train, y_test, y_train = X, X_test, y, y_test
+   
+   return X_train, y_train, X_test, y_test
+   
+
+def shotgun_strategy(config:ExperimentConfig):
+   # df = load_frame('MSFT')[['open', 'high', 'low', 'close']]
+   num_input_channels, in_seq_len, out_seq_len = config.num_input_channels, config.in_seq_len, config.out_seq_len
+   if config.X_train is None:
+      X, y, X_test, y_test = prep_data_for(config)
+   else:
+      X, y, X_test, y_test = config.X_train, config.y_train, config.X_test, config.y_test
 
    core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
 
    model_cores = [
-      ResNetBaseline,
+      # ResNetBaseline,
       FCNBaseline,
-      # FCNNaccBaseline,
    ]
 
    rates = [
-      0.00005,
-      0.00015,
-      0.0001,
+      # 0.00005,
+      0.0006,
+      0.001,
+      0.0015,
+      0.002,
+      # 0.0001,
+      # 0.00015,
    ]
 
    losses = [
       BCEWithLogitsLoss
    ]
 
-   import random
    combos = list(itertools.product(model_cores, rates, losses))
 
    model_variants = (
@@ -273,6 +292,7 @@ def shotgun_strategy(config:ExperimentConfig):
          rate,
          crit_factory(),
          Sequential(
+            Dropout(p=0.18),
             base_factory(**core_kw)
          )
       )
@@ -281,6 +301,12 @@ def shotgun_strategy(config:ExperimentConfig):
    )
 
    experiments:List[Dict[str, Any]] = []
+   
+   # from nn.data.sampler import DataFrameSampler
+   def on_sampler(sampler):
+      from nn.data.sampler import add_indicators
+      sampler.configure(in_seq_len=config.in_seq_len)
+      # sampler.preprocessing_funcs.append(add_indicators)
 
    for mventry in model_variants:
       base_ctor, learn_rate, criterion, model = mventry
@@ -297,12 +323,9 @@ def shotgun_strategy(config:ExperimentConfig):
       ]))
       print('final accuracy score:', metrics.score)#type: ignore
       
-      
-      
-      print(hist.sort_values(by='accuracy', ascending=False))
       from coinflip_backtest import backtest
       
-      trading_perf = backtest(stock=config.symbol, model=model)
+      trading_perf = backtest(stock=config.symbol, model=model, on_sampler=on_sampler)
       
       experiments.append(dict(
          model=model,
@@ -316,28 +339,20 @@ def shotgun_strategy(config:ExperimentConfig):
    best_loop = maxby(experiments, key=lambda e: e['score'])
    score, model, mdl_config = gets(best_loop, 'score', 'model', 'mdl_config')
 
-
    #* save the best-qualified classifier
    torch.save(model.state_dict(), './classifier_pretrained_state')
    torch.save(model, './classifier_pretrained.pt')
    accuracy = evaluate(model, X_test, y_test)
 
-   pprint(config)
-
    print('accuracy of final exported model is ', accuracy)
    return best_loop
 
-def generate_figures():
+def generate_figures(model, symbols):
    import matplotlib.pyplot as plt
    from coinflip_backtest import backtest
    
-   winners = pickle.load(open('./experiment_winners.pickle', 'rb'))
-   for symbol, best_loop in winners.items():
-      print(best_loop.keys())
-      model:Module = best_loop['model']
-      model.load_state_dict(best_loop['model_state'])
-      
-      trade_sess = backtest(stock=symbol, model=model)
+   for symbol in symbols:
+      trade_sess:DataFrame = backtest(stock=symbol, model=model)
       
       pprint(dict(
          symbol=symbol,
@@ -353,13 +368,163 @@ def generate_figures():
          x='datetime',
          y=['close', 'balance'],
          figsize=(24, 16), 
+         fontsize=14,
          legend=True, 
          stacked=True
       )
       
       plt.savefig(f'./figures/{symbol}_coin_flip_net.png')
+      # plt.show(block=False)
+      # plt.closep('all')
+      final_roi_held = trade_sess.baseline_roi.iloc[-1]
+      final_roi_traded = trade_sess.roi.iloc[-1]
       
-      plt.close('all')
+      
+def train_models_for(configs:List[ExperimentConfig], strategy='shotgun'):
+   winners = {}
+   for cfg in configs:
+      symbol = cfg.symbol
+      try:
+         best = winners[symbol] = shotgun_strategy(config=cfg)
+      
+      except Exception as error:
+         pprint(error)
+         continue
+   
+   # pprint(winners)
+   
+   pickle.dump(winners, open('main.train_models_for.winners', 'wb+'))
+   
+   return winners
+
+def fast_train_model_for(config: ExperimentConfig):
+   assert config.num_input_channels is not None and config.num_predicted_classes is not None
+   
+   X, y, X_test, y_test = prep_data_for(config)
+   fcn = FCNBaseline(config.num_input_channels, config.num_predicted_classes)
+   fcn = fit(fcn, X, y, eval_X=X_test, eval_y=y_test, criterion=BCEWithLogitsLoss(), lr=0.00015, epochs=config.epochs)
+   # evaluate(fcn, X_test, y_test)
+   return fcn
+
+def fast_train_models_for(configs:List[ExperimentConfig]):
+   winners = {}
+   for cfg in configs:
+      winners[cfg.symbol] = fast_train_model_for(cfg)
+   return winners
+
+def ensemble_stage1(cache_as='ensemble', rebuild=False, **kwargs):
+   from fn import _, F
+   from nn.arch.contrarion import ApexEnsemble, Args
+   from cytoolz.dicttoolz import valmap
+      
+   proto = ExperimentConfig(
+      in_seq_len = kwargs.pop('in_seq_len', 14),
+      num_input_channels = kwargs.pop('num_input_channels', 4),
+      num_predicted_classes=2,
+      epochs=75,
+      val_split=0.4
+   )
+   
+   if rebuild or cache_as is None or not P.exists(f'.{cache_as}_pretrained.pt'):
+      symbols = list_stonks()
+      import random as rand
+      
+      symbols = rand.sample(symbols, 2)
+      model_factory = F(train_models_for)
+      
+      configs = []
+      for sym in symbols:
+         configs.append(proto.extend(symbol=sym))
+      
+      pprint(configs)
+      
+      winners = model_factory(configs)
+      winner_models = valmap(lambda x: x[1] if isinstance(x, tuple) else (x['model'] if isinstance(x, dict) else x), winners)
+      
+      ensemble = ApexEnsemble(winner_models, Args(
+         input_shape=[proto.in_seq_len, proto.num_input_channels], #type: ignore
+         **asdict(proto)
+      ))
+      
+      torch.save(ensemble.state_dict(), f'.{cache_as}_state_dict.pt')
+      torch.save(ensemble, f'.{cache_as}_pretrained.pt')
+      
+   elif P.exists(f'./.{cache_as}_pretrained.pt'):
+      ensemble:ApexEnsemble = torch.load(f'.{cache_as}_pretrained.pt')
+      ensemble_state = torch.load(f'.{cache_as}_state_dict.pt')
+      ensemble.load_state_dict(ensemble_state)
+      
+   else:
+      raise Exception('Ensemble not assembled')
+   
+   assert ensemble is not None
+   
+   for sym in ensemble.component_names:
+      backtest(stock=sym, model=ensemble)
+
+def ensemble_stage2(proto=None, cache_as='ensemble', rebuild=False, **kwargs):
+   from fn import _, F
+   from nn.arch.contrarion import ApexEnsemble, Args
+   from cytoolz.dicttoolz import valmap
+   from nn.data.agg import aggds
+   import random as rand
+   
+   proto = proto if proto is not None else ExperimentConfig(
+      in_seq_len = kwargs.pop('in_seq_len', 14),
+      num_input_channels = kwargs.pop('num_input_channels', 5),
+      num_predicted_classes=2,
+      epochs=3,
+      val_split=0.4
+   )
+   
+   symbols_a = [
+      'MSFT', 'GOOG', 'AAPL',
+      # 'TSLA', 'GOOGL', 'INTC',
+      # 'NVDA', 'AMD', 'HPE'
+   ]
+   
+   symbols_b = rand.sample(list_stonks(), 3)
+   
+   ds = aggds(proto, symbols_a)
+   proto, X_train, y_train, X_test, y_test = ds
+   
+   proto.X_train, proto.y_train, proto.X_test, proto.y_test = X_train, y_train, X_test, y_test
+   
+   print(f'No. of training samples: {len(X_train)}')
+   best_loop = shotgun_strategy(proto.extend(symbol=rand.choice(symbols)))
+   
+   model = best_loop['model']
+   
+   generate_figures(model, rand.sample(list_stonks(), 50))
+   
+   import matplotlib.pyplot as plt
+   plt.show()
+   
+   return model
+
+def ensemble_stage3(rebuild=False, **kwargs):
+   n_layers = 3
+   layers = []
+   
+   proto = ExperimentConfig(
+      in_seq_len = kwargs.pop('in_seq_len', 14),
+      num_input_channels = kwargs.pop('num_input_channels', 4),
+      num_predicted_classes=2,
+      epochs=3,
+      val_split=0.4
+   )
+   
+   for _ in range(n_layers):
+      layers.append(ensemble_stage2(proto=proto))
+      
+   
+def polysym(train_x, train_y, test_x, test_y):
+   model = FCNBaseline2D(5, 2)
+   print(model)
+   print(train_y.shape)
+   model = fit(model, train_x, train_y, criterion=BCEWithLogitsLoss(), eval_X=test_x, eval_y=test_y, lr=0.0005, epochs=10)
+   
+   
 
 if __name__ == '__main__':
    import sys 
@@ -368,28 +533,16 @@ if __name__ == '__main__':
    if 'figures' in argv:
       generate_figures()
       exit()
-   
-   symbols = [
-      # 'MSFT', 'GOOG', 'GOOGL', 'TSLA', 'AAPL', 'SONY', 'INTC', 
-      'NVDA', 'AMD',
-      # 'NTDOY', 'HPE'     
-   ]
-   
-   winners = {}
-   for symbol in symbols:
-      try:
-         winners[symbol] = shotgun_strategy(ExperimentConfig(
-            in_seq_len=14,
-            symbol=symbol
-         ))
       
-      except Exception as error:
-         pprint(error)
-         continue
+   elif 'ensemble' in argv:
+      rebuild = ('rebuild' in argv)
+      ensemble_stage2(rebuild=rebuild)
+      exit()
+   else:
+      from nn.data.agg import polysymbolic_dataset
+      
+      train_x, train_y, test_x, test_y = polysymbolic_dataset('sp100_daily.pickle')
+      
+      polysym(train_x, train_y, test_x, test_y)
    
-   pickle.dump(winners, open('./experiment_winners.pickle', 'wb+'))
    
-   for sym, best_row in winners.items():
-      print(f'Highest-Achieved ROI for [{sym.upper()}]  =  {best_row["score"]:,.2f}%')
-   
-   generate_figures()
