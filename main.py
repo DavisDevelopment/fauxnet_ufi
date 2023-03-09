@@ -411,6 +411,16 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
       logs:pd.Series = trade_sess.trade_logs #type: ignore
       logs['datetime'] = logs.index
       
+      #* (WHERE APPLICABLE) compute the margin by which our agent outperformed a BUY/HOLD strategy
+      final_roi_held = trade_sess.baseline_roi
+      final_roi_traded = trade_sess.roi
+      advantage = (final_roi_traded - final_roi_held)/final_roi_held*100.0
+      
+      if final_roi_traded == 1.0 and not any(logs.roi != 1.0):
+         #* skip iterations for which the Agent never receives a BUY signal
+         #? ... which I could be doing in a more conceptually direct way
+         continue
+      
       try:
          #* Plot the symbol's close against the agent's trading balance
          logs.plot(
@@ -431,16 +441,7 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
          pprint(error)
          print(logs)
          input()
-      
-      #* (WHERE APPLICABLE) compute the margin by which our agent outperformed a BUY/HOLD strategy
-      final_roi_held = trade_sess.baseline_roi
-      final_roi_traded = trade_sess.roi
-      advantage = (final_roi_traded - final_roi_held)/final_roi_held*100.0
-      
-      if final_roi_traded == 1.0:
-         #* skip iterations for which the Agent never receives a BUY signal
-         #? ... which I could be doing in a more conceptually direct way
-         continue
+           
       
       #* store information about this eval-iteration
       elogs.append(dict(
