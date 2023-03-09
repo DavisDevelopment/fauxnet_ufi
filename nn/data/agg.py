@@ -130,7 +130,7 @@ def aggds(config:ExperimentConfig, symbols):
    from nn.data.sampler import add_indicators
    
    for sym in symbols:
-      df = load_frame(sym)
+      df = load_frame(sym, dir='./sp100')
       df = add_indicators(df)
       
       cfg = config.extend(num_input_channels=len(df.columns))

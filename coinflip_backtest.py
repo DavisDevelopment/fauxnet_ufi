@@ -2,6 +2,8 @@
 from pprint import pprint
 import sys, os
 
+from termcolor import colored
+
 from datatools import norm_batches, percent_change, rescale
 from nn.ts.classification.fcn_baseline import FCNNaccBaseline, FCNBaseline
 P = os.path
@@ -105,6 +107,8 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
       on_sampler(sampler)
    
          
+   last_time = None
+   
    for time, X, y in sampler.samples():
       ypred:Tensor = model(X)
       # print(type(ypred))
@@ -129,22 +133,29 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
       else:
          raise Exception('Invalid value for ypred; Invalid class label')
       
+      last_time = time
+      
    if holdings > 0:
-      close_long(time)
+      close_long(last_time)
+      
    elif holdings < 0:
-      close_short(time)
+      close_short(last_time)
    
-   balances.append((time, dollars))
+   balances.append((last_time, dollars))
    
    return_on_investment = ((dollars / dollars_init) * 100)
+   
    print(f'roi = {return_on_investment:,.2f}%')
    
    return logs, balances
 
 # if __name__ == '__main__':
 def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None):
+   ticker:str = 'AAPL'
+   
    if isinstance(stock, str):
-      stock:pd.DataFrame = load_dataframe(str(stock), './stonks', format='feather')[['open', 'high', 'low', 'close', 'volume']]
+      ticker = stock
+      stock:pd.DataFrame = load_dataframe(str(stock), './sp100', format='feather')[['open', 'high', 'low', 'close', 'volume']]
    else:
       pass
 
@@ -165,7 +176,7 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
    
    close_init = close.iloc[0]
    close_final = close.iloc[-1]
-   baseline_roi = (close_final / close_init)
+   baseline_roi = float(close_final / close_init)
    blogs['baseline_roi'] = (close / close_init)
    blogs['roi'] = (blogs.balance / bal_init)
    print(blogs)
@@ -179,9 +190,16 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
    pl_ratio = (P / L)
    final_roi = (bal_final / bal_init)
    
+   vs_market = float(round(final_roi/baseline_roi, 3))
+   
+   print('Trading vs Holding' + colored(f'({ticker})', 'cyan') + ': ', vs_market)
+   
+   did_beat_market = (vs_market > 1)
+   
    return Struct(
       pl_ratio=pl_ratio, 
       roi=final_roi,
       baseline_roi=baseline_roi,
-      trade_logs=blogs
+      trade_logs=blogs,
+      did_beat_market=did_beat_market
    )
