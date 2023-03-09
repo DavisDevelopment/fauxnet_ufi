@@ -302,11 +302,13 @@ def shotgun_strategy(config:ExperimentConfig):
 
    experiments:List[Dict[str, Any]] = []
    
-   # from nn.data.sampler import DataFrameSampler
+   from nn.data.sampler import DataFrameSampler
    def on_sampler(sampler):
       from nn.data.sampler import add_indicators
       sampler.configure(in_seq_len=config.in_seq_len)
       # sampler.preprocessing_funcs.append(add_indicators)
+   # sampler = DataFrameSampler(load_frame(config.symbol))
+   # on_sampler(sampler)
 
    for mventry in model_variants:
       base_ctor, learn_rate, criterion, model = mventry
@@ -538,6 +540,7 @@ if __name__ == '__main__':
       rebuild = ('rebuild' in argv)
       ensemble_stage2(rebuild=rebuild)
       exit()
+      
    else:
       from nn.data.agg import polysymbolic_dataset
       

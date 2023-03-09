@@ -35,7 +35,7 @@ def prep_frame(df:DataFrame, config:ExperimentConfig):
    from sklearn.preprocessing import MinMaxScaler
    
    df = df.copy()
-   df['delta_pct'] = df['close'].pct_change()
+   # df['delta_pct'] = df['close'].pct_change()
    
    data:ndarray = df.to_numpy()[1:]
    
@@ -46,9 +46,9 @@ def prep_frame(df:DataFrame, config:ExperimentConfig):
 
 
    scaler = MinMaxScaler()
-   scaler.fit(data[:, :-1])
+   scaler.fit(data[:, :])
 
-   seq_pairs = list(win.iter(lfn=lambda x: scaler.transform(x[:, :-1])))
+   seq_pairs = list(win.iter(lfn=lambda x: scaler.transform(x[:, :])))
    Xl, yl = [list(_) for _ in unzip(seq_pairs)]
    Xnp:ndarray
    ynp:ndarray 
@@ -123,47 +123,25 @@ def polysymbolic_dataset(name:str, **kwargs):
    
    return train_x, train_y, test_x, test_y
 
-def add_indicators(cfg:ExperimentConfig, df:DataFrame):
-   import pandas_ta as ta
-   # from pandas_ta import 
-   # indicators = df.ta.indicators()
-   dc = df.ta.donchian(inplace=True)
-   rsi = df.ta.rsi(inplace=True)
-   bbands = df.ta.bbands(inplace=True)
-   
-   indicators = [dc, ('rsi', rsi), bbands]
-   
-   for ti in indicators:
-      if isinstance(ti, DataFrame):
-         for c in ti.columns:
-            df[c] = ti[c]
-      elif isinstance(ti, tuple):
-         c, values = ti
-         df[c] = np.nan
-         df.loc[values.index, c] = values
-   
-   try:
-      df = df.drop(columns=['datetime'])
-   except:
-      pass
-   df = df.dropna()
-   cfg = cfg.extend(num_input_channels=len(df.columns))
-   return cfg, df
-
 def aggds(config:ExperimentConfig, symbols):
    train_x, train_y, test_x, test_y = [], [], [], []
    num_input_channels = config.num_input_channels
    
+   from nn.data.sampler import add_indicators
+   
    for sym in symbols:
       df = load_frame(sym)
-      cfg, df = add_indicators(config.extend(symbol=sym), df)
+      df = add_indicators(df)
+      
+      cfg = config.extend(num_input_channels=len(df.columns))
       xa, ya, xb, yb = prep_frame(df, cfg)
+      
       train_x.append(xa.numpy())
       train_y.append(ya.numpy())
       test_x .append(xb.numpy())
       test_y .append(yb.numpy())
       
-      num_input_channels = cfg.num_input_channels
+      num_input_channels:int = len(df.columns)
    
    vars = (train_x, train_y, test_x, test_y)   
    buffers = (a, b, c, d) = (

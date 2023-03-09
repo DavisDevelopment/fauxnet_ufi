@@ -50,30 +50,46 @@ class DataFrameSampler:
    ignore:List[str]
    preprocessing_funcs:List[Callable[[DataFrame], DataFrame]]
    
-   def __init__(self, df:DataFrame, ignore=[], config={}):
+   def __init__(self, df:DataFrame, ignore=[], config={}, technical_analysis=True):
+      
       self.df = df
       self.ignore = ignore
-      self.preprocessing_funcs = [add_indicators]
-      self.config = config
+      self.preprocessing_funcs = []
+      if technical_analysis:
+         self.preprocessing_funcs.append(add_indicators)
+      
+      self.config = merge(dict(
+         track_column=3
+      ), config)
+      
+      self._preprocessing_func = (lambda df: df)
       
    def configure(self, **kwargs):
       self.config = merge(self.config, kwargs)
       return self
-      
-   def samples(self):
-      df = self.df.copy()
-      df = compose_left(*self.preprocessing_funcs)(df)
-      
+   
+   def extract_raw_array(self, df:DataFrame, scale=True, scaler=None)->ndarray:
       data:ndarray = df.to_numpy()
 
+      if scaler is None:
+         scaler = MinMaxScaler()
+         scaler.fit(data)
+      
+      data = scaler.transform(data)
+      return data
+      
+   def samples(self):
+      preprocess = self._preprocessing_func = compose_left(*self.preprocessing_funcs)
+      df = self.df.copy()
+      assert 'volume' in df.columns
+      df:DataFrame = preprocess(df)
+      data:ndarray = df.to_numpy()
       scaler = MinMaxScaler()
       scaler.fit(data)
-      
-      # p, l = count_classes(data)
-      # print(f'Loaded dataset contains {p} P-samples, and {l} L-samples')
 
       #*TODO define ModelConfig class to pass around instead of duplicating these variables endless all around town
       in_seq_len = self.config.get('in_seq_len', 14)
+      track_column = self.config.get('track_column', 3)
       out_seq_len = 1
       
       for i in range(1+in_seq_len, len(data)-out_seq_len-1):
@@ -83,5 +99,14 @@ class DataFrameSampler:
          X = scaler.transform(X)
          X = from_numpy(X)
          X = X.unsqueeze(0).float().swapaxes(1, 2)
+         # print(X.shape)
+         assert X.shape[2] == in_seq_len
          
-         yield tstamp, X
+         y_cur = data[i, track_column]
+         y_next = data[i+1, track_column]
+         y_delta = y_next - y_cur
+         y_pct = y_delta / y_cur * 100.0
+         
+         #TODO return the classification for `y_pct` instead of returning `y_pct`
+         
+         yield tstamp, X, y_pct

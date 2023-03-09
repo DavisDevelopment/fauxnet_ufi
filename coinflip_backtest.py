@@ -105,7 +105,7 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
       on_sampler(sampler)
    
          
-   for time, X in sampler.samples():
+   for time, X, y in sampler.samples():
       ypred:Tensor = model(X)
       # print(type(ypred))
       if ypred.ndim != 0:
@@ -144,7 +144,7 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
 # if __name__ == '__main__':
 def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None):
    if isinstance(stock, str):
-      stock:pd.DataFrame = load_dataframe(str(stock), './stonks', format='feather')[['open', 'high', 'low', 'close']]
+      stock:pd.DataFrame = load_dataframe(str(stock), './stonks', format='feather')[['open', 'high', 'low', 'close', 'volume']]
    else:
       pass
 
@@ -182,5 +182,6 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
    return Struct(
       pl_ratio=pl_ratio, 
       roi=final_roi,
+      baseline_roi=baseline_roi,
       trade_logs=blogs
    )
