@@ -454,3 +454,22 @@ def norm_batches(x: Tensor):
          _, scaled_batch = rescale(batch, 0.0, 1.0)
          res[i] = scaled_batch
       return res
+   
+def training_suitability(df: DataFrame)->float:
+   # from math import 
+   deltas = df['close'].pct_change().iloc[1:]
+   
+   U = []
+   D = []
+   
+   for i in range(len(deltas)):
+      mv = deltas[i]
+      if mv > 0:
+         U.append(mv)
+      elif mv < 0:
+         D.append(abs(mv))
+         
+   U, D = np.array(U), np.array(D)
+   nU, nD = len(U), len(D)
+   
+   return (nU / nD)

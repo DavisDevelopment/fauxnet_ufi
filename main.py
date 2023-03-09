@@ -24,7 +24,7 @@ from pandas import DataFrame
 from typing import *
 from nn.ts.classification.fcn_baseline import FCNBaseline2D, FCNNaccBaseline
 # from nn.arch.transformer.TransformerDataset import TransformerDataset, generate_square_subsequent_mask
-from tools import Struct, gets, maxby, unzip, safe_div, argminby, argmaxby
+from tools import Struct, gets, maxby, minby, unzip, safe_div, argminby, argmaxby
 from nn.arch.lstm_vae import *
 import torch.nn.functional as F
 from nn.ts.classification import LinearBaseline, FCNBaseline, InceptionModel, ResNetBaseline
@@ -217,7 +217,7 @@ class ExperimentConfig:
       # assert self.in_seq_len is not None, "size of input sequence must be provided"
       
       if self.symbol is not None and self.df is None:
-         self.df = load_frame(self.symbol)
+         self.df = load_frame(self.symbol, './sp100')
             
    # @wraps(ExperimentConfig)
    def extend(self, **params):
@@ -393,7 +393,6 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
       symbols = symbols if symbols is not None else list_stonks('./sp100')
    
    print(f'EVALUATING on {len(symbols)} symbols')
-   input()
    
    elogs = []
    
@@ -438,6 +437,11 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
       final_roi_traded = trade_sess.roi
       advantage = (final_roi_traded - final_roi_held)/final_roi_held*100.0
       
+      if final_roi_traded == 1.0:
+         #* skip iterations for which the Agent never receives a BUY signal
+         #? ... which I could be doing in a more conceptually direct way
+         continue
+      
       #* store information about this eval-iteration
       elogs.append(dict(
          symbol=symbol,
@@ -450,8 +454,9 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
    
    #* convert the evaluation logs to a DataFrame, and print it to the console
    elogs = DataFrame.from_records(elogs)
-   print(elogs)
-   input()
+   
+   if len(elogs) == 0:
+      return None
    
    return elogs
    
@@ -564,50 +569,96 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
    proto.X_train, proto.y_train, proto.X_test, proto.y_test = X_train, y_train, X_test, y_test
    
    print(f'No. of training samples: {len(X_train)}')
-   best_loop = shotgun_strategy(proto.extend(symbol=rand.choice(symbols)))
+   
+   #* select from only the most 'suitable' datasets for evaluation
+   from datatools import training_suitability
+   # most_suited = minby(symbols, lambda sym: training_suitability(load_frame(sym, './sp100')))
+   most_suited = rand.choice(symbols)
+   
+   print(f'Most suitable symbol is {most_suited}')
+   best_loop = shotgun_strategy(proto.extend(symbol=most_suited))
    
    model = best_loop['model']
    
-   elogs = evaluate_loop(loop=best_loop)
-   # print(elogs)
+   elogs = evaluate_loop(loop=best_loop, n_symbols=65)
    
    import matplotlib.pyplot as plt
-   # plt.show()
    
    return best_loop, elogs
 
-def ensemble_stage3(n_winners=2, n_symbols=3, filter_symols=None, **kwargs):
+def ensemble_stage3(n_winners=25, n_symbols=5, filter_symols=None, **kwargs):
    import random as rand
    all_symbols = list_stonks('./sp100')
    
-   n_batches = 5
    viable = []
    
    symbols = None
    
    colored = termcolor.colored
    
-   while len(viable) < n_winners:
-      symbols = symbols if symbols is not None else rand.sample(all_symbols, n_symbols)
-      print('\n\n', colored('SYMBOLS=', 'cyan', attrs=['bold']), '   ', colored(f'{symbols}', 'yellow'), '\n\n')
-      
-      winner, elogs = ensemble_stage2(symbols=symbols, epochs=2)
-      elogs:DataFrame
-      # pprint(winner)
-      
-      viable_logs = elogs[elogs.advantage > 1.0]
-      print(viable_logs)
-      
-      if len(viable_logs) > 0:
-         viable.append(dict(
-            symbols=symbols[:],
-            eval_logs=elogs,
-            loop=winner
-         ))
-         
-   return DataFrame.from_records(viable)
-      
+   from time import time
+   skipped = 0
    
+   while len(viable) < n_winners:
+      try: #* keyboardinterrupt try/catch block
+         symbols = symbols if symbols is not None else rand.sample(all_symbols, n_symbols)
+         print('\n\n', colored('SYMBOLS=', 'cyan', attrs=['bold']), '   ', colored(f'{symbols}', 'yellow'), '\n\n')
+         
+         tbeg = time()
+         winner, elogs = ensemble_stage2(
+            symbols=symbols, 
+            epochs=2
+         )
+         tend = time()
+         
+         print('Took ', colored(f'{(tend - tbeg)/60}', 'yellow', attrs=['bold']) + 'min')
+         
+         if elogs is None:
+            print(
+               colored('Failed to produce a winning model', 'red', attrs=['bold']), 
+               '\n',
+               colored('Continuing...', 'cyan', 'on_red')
+            )
+            continue
+         
+         elogs:DataFrame
+         
+         viable_logs:DataFrame = elogs[elogs.score > 0.0]
+         
+         if (len(viable_logs)/len(elogs) < 0.5):
+            #? reject the model if there were more symbols for which it did not facilitate profitable avtive trading than for which it did
+            print(
+               colored('Failed to produce a model which beats the market on more than half of the evaluated symbols', 'red', attrs=['bold']), 
+               '\n',
+               colored('Discarding iteration and continuing...', 'cyan', 'on_red')
+            )
+
+            continue
+         
+         viable_logs.sort_values('score', ascending=False, inplace=True)
+         
+         print(viable_logs)
+         
+         if len(viable_logs) > 0:
+            viable.append(dict(
+               symbols=symbols[:],
+               eval_logs=elogs,
+               loop=winner
+            ))
+         
+      except KeyboardInterrupt:
+         print(colored('Interrupted! Skipping..', 'cyan', attrs=['bold']))
+         skipped += 1
+         if skipped > 10:
+            break
+         else:
+            continue
+      
+   results:DataFrame = DataFrame.from_records(viable)
+   
+   results.to_pickle('./ensemble3_results.pickle')
+   
+   return results
       
    
 def polysym(train_x, train_y, test_x, test_y):
