@@ -14,3 +14,4 @@ stonks/
 *.pickle
 
 .model_checkpoints/
+*.png
