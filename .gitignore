@@ -15,3 +15,5 @@ stonks/
 
 .model_checkpoints/
 *.png
+
+sp100/
