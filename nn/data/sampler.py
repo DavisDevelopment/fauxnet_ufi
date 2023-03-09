@@ -24,9 +24,9 @@ def add_indicators(df:DataFrame):
    # indicators = df.ta.indicators()
    dc = df.ta.donchian(inplace=True)
    rsi = df.ta.rsi(inplace=True)
-   bbands = df.ta.bbands(inplace=True)
+   # bbands = df.ta.bbands(inplace=True)
    
-   indicators = [dc, ('rsi', rsi), bbands]
+   indicators = [dc, ('rsi', rsi)]
    
    for ti in indicators:
       if isinstance(ti, DataFrame):
