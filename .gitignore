@@ -17,3 +17,5 @@ stonks/
 *.png
 
 sp100/
+
+classifier_pretrained.pt

@@ -25,7 +25,13 @@ class Thunk(Generic[T]):
       self.once = once
       
       if kind is None:
-         if callable(init):
+         if isinstance(init, Thunk):
+            self.kind = init.kind
+            self.get_value = init.get_value
+            self.value = init.value
+            self.once = init.once
+         
+         elif callable(init):
             self.get_value = init
             self.kind = 1
             
@@ -52,6 +58,14 @@ class Thunk(Generic[T]):
    
    def __repr__(self):
       return repr(self.get())
+   
+   def __call__(self, *args, **kwargs):
+      return self.get()(*args, **kwargs)
+   
+   def __getattr__(self, name:str):
+      return Thunk(lambda : getattr(self.get(), name))
+   
+   def __getitem__(self, index:Union[Thunk[Any], Any])->Thunk[Any]:
          
 binary_operators = [
    'add', 'sub', 'mul', 'div',

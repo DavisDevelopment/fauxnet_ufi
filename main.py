@@ -304,7 +304,7 @@ def shotgun_strategy(config:ExperimentConfig):
          rate,
          crit_factory(),
          Sequential(
-            # Dropout(p=0.18),
+            Dropout(p=0.05), #? randomly zero-out 5% of inputs
             base_factory(**core_kw)
          )
       )
@@ -315,6 +315,7 @@ def shotgun_strategy(config:ExperimentConfig):
    experiments:List[Dict[str, Any]] = []
    
    from nn.data.sampler import DataFrameSampler
+   
    def on_sampler(sampler):
       from nn.data.sampler import add_indicators
       
@@ -327,10 +328,7 @@ def shotgun_strategy(config:ExperimentConfig):
          min_ts=mints
       )
       
-      # sampler.preprocessing_funcs.append(add_indicators)
-   # sampler = DataFrameSampler(load_frame(config.symbol))
-   # on_sampler(sampler)
-
+   #* for each variation of the configuration
    for mventry in model_variants:
       base_ctor, learn_rate, criterion, model = mventry
       model:Sequential = model
@@ -338,13 +336,12 @@ def shotgun_strategy(config:ExperimentConfig):
       metrics:Struct = evaluate(model, X_test, y_test)
       hist:DataFrame
 
-      print('\n'.join([
-         f'baseline="{base_ctor.__qualname__}"', 
-         f'learn_rate={learn_rate}', 
-         f'loss_fn={criterion}'
-         # f'activation={activfn}'
-      ]))
-      print('final accuracy score:', metrics.score)#type: ignore
+      # print('\n'.join([
+      #    f'baseline="{base_ctor.__qualname__}"', 
+      #    f'learn_rate={learn_rate}', 
+      #    f'loss_fn={criterion}'
+      # ]))
+      # print('final accuracy score:', metrics.score)#type: ignore
       
       from coinflip_backtest import backtest
       
@@ -369,20 +366,23 @@ def shotgun_strategy(config:ExperimentConfig):
 
    #* select the permutation with the highest accuracy rating
    best_loop = maxby(experiments, key=lambda e: e['score'])
+   
    score, model, mdl_config = gets(best_loop, 'score', 'model', 'mdl_config')
 
    #* save the best-qualified classifier permutation
-   torch.save(model.state_dict(), './classifier_pretrained_state')
-   torch.save(model, './classifier_pretrained.pt')
-   accuracy = evaluate(model, X_test, y_test)
+   # torch.save(model.state_dict(), './classifier_pretrained_state')
+   # torch.save(model, './classifier_pretrained.pt')
+   # accuracy = evaluate(model, X_test, y_test)
 
-   print('accuracy of final exported model is ', accuracy)
+   # print('accuracy of final exported model is ', accuracy)
+   
    return best_loop
 
 def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
    import matplotlib.pyplot as plt
    from coinflip_backtest import backtest
    import random as rand
+   from termcolor import colored
    
    loop:Struct
    
@@ -395,8 +395,8 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
       symbols = rand.sample(list_stonks('./sp100'), n_symbols)
    else:
       symbols = symbols if symbols is not None else list_stonks('./sp100')
-   
-   print(f'EVALUATING on {len(symbols)} symbols')
+
+   print(colored('EVALUATING', 'yellow', attrs=['dark']), f' on {len(symbols)} symbols')
    
    elogs = []
    
@@ -442,10 +442,8 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
       
       except Exception as error:
          #* when an exception is raised during plotting, print the data we were trying to plot for debugging purposes
-         pprint(error)
          print(logs)
-         input()
-           
+         pprint(error)
       
       #* store information about this eval-iteration
       elogs.append(dict(
@@ -464,38 +462,6 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
       return None
    
    return elogs
-   
-def train_models_for(configs:List[ExperimentConfig], strategy='shotgun'):
-   winners = {}
-   for cfg in configs:
-      symbol = cfg.symbol
-      try:
-         best = winners[symbol] = shotgun_strategy(config=cfg)
-      
-      except Exception as error:
-         pprint(error)
-         continue
-   
-   # pprint(winners)
-   
-   pickle.dump(winners, open('main.train_models_for.winners', 'wb+'))
-   
-   return winners
-
-def fast_train_model_for(config: ExperimentConfig):
-   assert config.num_input_channels is not None and config.num_predicted_classes is not None
-   
-   X, y, X_test, y_test = prep_data_for(config)
-   fcn = FCNBaseline(config.num_input_channels, config.num_predicted_classes)
-   fcn = fit(fcn, X, y, eval_X=X_test, eval_y=y_test, criterion=BCEWithLogitsLoss(), lr=0.00015, epochs=config.epochs)
-   # evaluate(fcn, X_test, y_test)
-   return fcn
-
-def fast_train_models_for(configs:List[ExperimentConfig]):
-   winners = {}
-   for cfg in configs:
-      winners[cfg.symbol] = fast_train_model_for(cfg)
-   return winners
 
 def ensemble_stage1(cache_as='ensemble', rebuild=False, **kwargs):
    from fn import _, F
@@ -573,8 +539,9 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
    
    print(f'No. of training samples: {len(X_train)}')
    
-   #* select from only the most 'suitable' datasets for evaluation
    from datatools import training_suitability
+   
+   #* select from only the most 'suitable' datasets for evaluation
    # most_suited = minby(symbols, lambda sym: training_suitability(load_frame(sym, './sp100')))
    most_suited = rand.choice(symbols)
    
