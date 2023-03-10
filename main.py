@@ -31,6 +31,7 @@ from nn.ts.classification import LinearBaseline, FCNBaseline, InceptionModel, Re
 from nn.arch.transformer.TransformerDataset import generate_square_subsequent_mask
 
 from sklearn.preprocessing import MinMaxScaler
+from ttools.thunk import thunkv
 
 def list_stonks(stonk_dir='./stonks', shuffle=True):
    from pathlib import Path
@@ -347,7 +348,10 @@ def shotgun_strategy(config:ExperimentConfig):
       
       from coinflip_backtest import backtest
       
+      #TODO: backtest on multiple symbols for a more informative performance summary
       trading_perf = backtest(stock=config.symbol, model=model, on_sampler=on_sampler)
+      
+      entry_score = float(trading_perf.score)
       
       #* store some info on this permutation of the model
       experiments.append(dict(
@@ -355,7 +359,7 @@ def shotgun_strategy(config:ExperimentConfig):
          model_state=model.state_dict(),
          mdl_config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__),
          exp_config=config,
-         score=trading_perf.roi,
+         score=entry_score,
          did_beat_market=trading_perf.did_beat_market,
          logs=hist
       ))
@@ -558,10 +562,8 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
       val_split=0.4
    )
    
-   symbols = symbols if (symbols is not None) else [
+   symbols = (symbols if not callable(symbols) else symbols()) if (symbols is not None) else [
       'MSFT', 'GOOG', 'AAPL',
-      # 'TSLA', 'GOOGL', 'INTC',
-      # 'NVDA', 'AMD', 'HPE'
    ]
    
    ds = aggds(proto, symbols)
@@ -581,34 +583,36 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
    
    model = best_loop['model']
    
-   elogs = evaluate_loop(loop=best_loop, n_symbols=65)
+   n_eval_symbols = kwargs.pop('n_eval_symbols', 25)
+   elogs = evaluate_loop(loop=best_loop, n_symbols=n_eval_symbols)
    
    import matplotlib.pyplot as plt
    
-   return best_loop, elogs
+   return symbols, best_loop, elogs
 
-def ensemble_stage3(n_winners=25, n_symbols=5, filter_symols=None, **kwargs):
+def ensemble_stage3(n_winners=5, n_symbols=4, filter_symols=None, **kwargs):
    import random as rand
    all_symbols = list_stonks('./sp100')
    
    viable = []
    
-   symbols = None
+   bsymbols = None
    
    colored = termcolor.colored
    
    from time import time
-   skipped = 0
+   break_meter = 0
    
    while len(viable) < n_winners:
       try: #* keyboardinterrupt try/catch block
-         symbols = symbols if symbols is not None else rand.sample(all_symbols, n_symbols)
-         print('\n\n', colored('SYMBOLS=', 'cyan', attrs=['bold']), '   ', colored(f'{symbols}', 'yellow'), '\n\n')
+         symbols = lambda : (bsymbols if bsymbols is not None else rand.sample(all_symbols, n_symbols))
+         print('\n\n', colored('SYMBOLS=', 'cyan', attrs=['bold']), '   ', colored(f'{thunkv(symbols)}', 'yellow'), '\n\n')
          
          tbeg = time()
-         winner, elogs = ensemble_stage2(
+         symbols, winner, elogs = ensemble_stage2(
             symbols=symbols, 
-            epochs=2
+            epochs=4,
+            n_eval_symbols=10
          )
          tend = time()
          
@@ -641,34 +645,51 @@ def ensemble_stage3(n_winners=25, n_symbols=5, filter_symols=None, **kwargs):
          print(viable_logs)
          
          if len(viable_logs) > 0:
+            print(colored('QUALIFIED!!', 'green', attrs=['bold']))
+            
             viable.append(dict(
                symbols=symbols[:],
                eval_logs=elogs,
                loop=winner
             ))
+            
+            print(len(viable), ' viable candidates generated so far')
+            print('candidate symbols are ', symbols)
+            input()
+            
+         #* each time a full iteration completes organically, decrement the BREAK-meter
+         break_meter -= 1
          
       except KeyboardInterrupt:
          print(colored('Interrupted! Skipping..', 'cyan', attrs=['bold']))
-         skipped += 1
-         if skipped > 10:
+         
+         break_meter += 1 #* increment the BREAK-meter
+         if break_meter > 10:
             break
          else:
             continue
       
    results:DataFrame = DataFrame.from_records(viable)
+   print(results)
+   results_path = './ensemble3_results.pickle'
+   results.to_pickle(results_path)
    
-   results.to_pickle('./ensemble3_results.pickle')
+   print('Ensemble-3 results persisted to filesystem at %s' % results_path)
    
    return results
       
+def ensemble_stage4(stage3_results:DataFrame, **kwargs):
+   r = stage3_results
+   if len(stage3_results) == 0:
+      raise Exception('baw, dafuq')
+   
+   r['loop']
    
 def polysym(train_x, train_y, test_x, test_y):
    model = FCNBaseline2D(5, 2)
    print(model)
    print(train_y.shape)
    model = fit(model, train_x, train_y, criterion=BCEWithLogitsLoss(), eval_X=test_x, eval_y=test_y, lr=0.0005, epochs=10)
-   
-   
 
 if __name__ == '__main__':
    import sys 

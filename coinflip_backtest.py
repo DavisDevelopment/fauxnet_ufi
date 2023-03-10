@@ -194,6 +194,8 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
    
    print('Trading vs Holding' + colored(f'({ticker})', 'cyan') + ': ', vs_market)
    
+   score = (final_roi - baseline_roi) / final_roi * 100.0
+   
    did_beat_market = (vs_market > 1)
    
    return Struct(
@@ -201,5 +203,6 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
       roi=final_roi,
       baseline_roi=baseline_roi,
       trade_logs=blogs,
-      did_beat_market=did_beat_market
+      did_beat_market=did_beat_market,
+      score=score
    )
