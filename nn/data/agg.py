@@ -5,6 +5,8 @@ import pandas as pd
 from pandas import Series, DataFrame
 import torch
 from torch import Tensor, tensor, from_numpy
+
+from datatools import pl_trinary_labeling
 from .core import TensorBuffer, TwoPaneWindow
 from main import prep_data_for, ExperimentConfig, load_frame
 
@@ -31,7 +33,7 @@ def pl_binary_labeling(y):
    
    return labels
 
-def prep_frame(df:DataFrame, config:ExperimentConfig):
+def prep_frame(df:DataFrame, config:ExperimentConfig, fmt=2):
    from sklearn.preprocessing import MinMaxScaler
    
    df = df.copy()
@@ -55,7 +57,12 @@ def prep_frame(df:DataFrame, config:ExperimentConfig):
    Xnp, ynp = np.asanyarray(Xl), np.asanyarray(yl).squeeze(1)
 
    ynp = ynp
-   ynp:ndarray = pl_binary_labeling(ynp[:, 3])
+   if fmt == 2:
+      ynp:ndarray = pl_trinary_labeling(ynp[:, 3], fmt=2)
+      print(ynp)
+   else:
+      ynp:ndarray = pl_binary_labeling(ynp[:, 3])
+   
    Xnp, ynp = Xnp, ynp
 
    X, y = torch.from_numpy(Xnp), torch.from_numpy(ynp)
@@ -134,21 +141,21 @@ def aggds(config:ExperimentConfig, symbols):
       df = add_indicators(df)
       
       cfg = config.extend(num_input_channels=len(df.columns))
-      xa, ya, xb, yb = prep_frame(df, cfg)
+      xa, ya, xb, yb = prep_frame(df, cfg, fmt=2)
       
       train_x.append(xa.numpy())
-      train_y.append(ya.numpy())
+      train_y.append(ya.unsqueeze(1).numpy())
       test_x .append(xb.numpy())
-      test_y .append(yb.numpy())
+      test_y .append(yb.unsqueeze(1).numpy())
       
       num_input_channels:int = len(df.columns)
    
    vars = (train_x, train_y, test_x, test_y)   
    buffers = (a, b, c, d) = (
       TensorBuffer(10000, (num_input_channels, config.in_seq_len), dtype='float32'),
-      TensorBuffer(10000, (config.num_predicted_classes,), dtype='float32'),
+      TensorBuffer(10000, (1,), dtype='float32'),
       TensorBuffer(10000, (num_input_channels, config.in_seq_len), dtype='float32'),
-      TensorBuffer(10000, (config.num_predicted_classes,), dtype='float32'),
+      TensorBuffer(10000, (1,), dtype='float32'),
    )
    
    for i, arr in enumerate(vars):

@@ -4,7 +4,7 @@ import sys, os
 
 from termcolor import colored
 
-from datatools import norm_batches, percent_change, rescale
+from datatools import norm_batches, percent_change, quantize, rescale
 from nn.ts.classification.fcn_baseline import FCNNaccBaseline, FCNBaseline
 P = os.path
 import torch
@@ -113,20 +113,29 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
       ypred:Tensor = model(X)
       # print(type(ypred))
       if ypred.ndim != 0:
-         ypred = ypred.argmax()
+         # quantize
+         ypred = quantize(ypred, 3)
       
       if holdings > 0:
+         #TODO: only close when profit is not predicted
          close_long(time)
+      
       elif holdings < 0:
+         #TODO: only close when profit is not predicted
          close_short(time)
       
       balances.append((time, dollars))
       
-      if ypred == 1: 
+      
+      # print('ypred=', ypred)
+      if ypred == 0: #* Horizontal or Undefined movement
+         pass
+      
+      elif ypred == 1: #* Loss, Downward Movement 
          if pos_type in ('long', 'both'):
             open_long(time)
                
-      elif ypred == 0:
+      elif ypred == 2: #* Gain, Upward Movement
          if pos_type in ('short', 'both'):
             open_short(time)
       

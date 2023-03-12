@@ -29,11 +29,21 @@ from cytoolz import *
 # from kraken import krakenClient
 from pathlib import Path
 import torch
+from torch import Tensor
 
 def renormalize(n, r_a, r_b):
    delta1 = r_a[1] - r_a[0]
    delta2 = r_b[1] - r_b[0]
    return (delta2 * (n - r_a[0]) / delta1) + r_b[0]
+
+def quantize(n:Tensor, nQ:int, r_a=(0.0, 1.0), r_b=None, rounding_fn=torch.ceil):
+   n = n.detach()
+   if True in n[n == torch.nan]:
+      raise Exception('no')
+   n[n < r_a[0]] = r_a[0]
+   n[n > r_a[1]] = r_a[1]
+   scaled = renormalize(n, r_a, (0, nQ-1))
+   return rounding_fn(scaled)
  
 def krakenClient():
    from keychain import getkeys
@@ -438,6 +448,34 @@ def pl_binary_labeling(y: ndarray):
    labels[P, 1] = 1.0 # profit (1)
    
    return labels
+
+def pl_trinary_labeling(y:ndarray, thresh:float=0.006, fmt=1):
+   if fmt == 2:
+      ydelta = percent_change(y)
+      P = np.argwhere(ydelta > thresh)
+      L = np.argwhere(ydelta < -thresh)
+      E = np.argwhere((ydelta <= thresh)&(ydelta >= -thresh))
+      n_classes = 3
+      buckets = [E, L, P]
+      labels = np.zeros((len(y),))
+      for i, bucket in enumerate(buckets):
+         labels[bucket] = renormalize(i, (0, 2), (0.0, 1.0))
+      return labels
+   
+   labels = np.zeros((len(y), 2))
+   
+   ydelta = percent_change(y)
+   
+   P = np.argwhere(ydelta > thresh)
+   L = np.argwhere(ydelta < -thresh)
+   E = np.argwhere((ydelta <= thresh)&(ydelta >= -thresh))
+   
+   labels[L, 0] = 1.0 # loss (-1)
+   labels[P, 1] = 1.0 # profit (1)
+   labels[E, 2] = 1.0 #
+   
+   return labels
+
 
 from torch import Tensor
 from torch.autograd import Variable

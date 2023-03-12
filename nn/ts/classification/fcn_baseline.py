@@ -1,3 +1,4 @@
+from termcolor import colored
 import torch
 from torch import nn, zeros
 from torch.autograd import Variable
@@ -32,16 +33,21 @@ class FCNBaseline(nn.Module):
         self.input_shape = (None, in_channels, None)
         self.output_shape = (None, num_pred_classes)
 
-        self.layers = nn.Sequential(*[
-            ConvBlock(in_channels, 256, 5, 1),
-            ConvBlock(256, 256, 4, 1),
-            ConvBlock(256, 256, 4, 1),
-            ConvBlock(256, 128, 3, 1)
-        ])
+        blocks = [
+            (in_channels, 16, 2, 1),
+            (16, 16, 2, 1),
+            (16, 8, 2, 1),
+            (8, 8, 2, 1)
+        ]
         
-        self.final = nn.Linear(128, num_pred_classes)
+        self.network_layers = [ConvBlock(*args) for args in blocks]
         
-        self.activation = nn.Sigmoid()
+        self.tail = nn.Sequential(
+            nn.Linear(8, 1)
+        )
+        #? should this be a Neural Accumulator?
+        
+        self.activation = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
         input_shape = x.shape
@@ -52,13 +58,21 @@ class FCNBaseline(nn.Module):
         
         # for i in range(batch_len):
         _x = x
-        _x = self.layers(_x)
-        _x = self.activation(_x)
-        _x = _x.mean(dim=-1)
-        _x = self.final(_x)
+        # print('X:', colored(str(_x.shape), 'yellow', attrs=['underline']), ' = ', _x[0:2].detach().numpy())
+        for i, block in enumerate(self.network_layers):
+            _x = block(_x)
+            # print('X'+colored(f'[{i}]', 'light_blue', attrs=['bold']), colored(str(_x.shape), 'yellow', attrs=['underline']), ' = ', _x[0:2].detach().numpy())
+            
         
-        # y[i] = _x
-    
+        _x = _x.mean(dim=-1)
+        # print('X:', colored(str(_x.shape), 'yellow', attrs=['underline']), ' = ', _x[0:2].detach().numpy())
+        if self.activation is not None:
+            _x = self.activation(_x)
+            # print('X:', colored(str(_x.shape), 'yellow', attrs=['underline']), ' = ', _x[0:2].detach().numpy())
+        
+        _x = self.tail(_x)
+        # print('X:', colored(str(_x.shape), 'yellow', attrs=['underline']), ' = ', _x[0:2].detach().numpy())
+        
         return _x
     
 class FCNBaseline2D(nn.Module):

@@ -12,7 +12,7 @@ from torch.jit._script import ScriptModule, ScriptFunction
 from coinflip_backtest import backtest, count_classes
 from nn.arch.transformer.TimeSeriesTransformer import TimeSeriesTransformer
 from nn.common import *
-from datatools import P, ohlc_resample, pl_binary_labeling, renormalize, unpack
+from datatools import P, ohlc_resample, pl_binary_labeling, quantize, renormalize, unpack
    
 from nn.namlp import NacMlp
 from cytoolz import *
@@ -113,7 +113,7 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       
       y_pred = model(X)
       
-      loss = crit(y, y_pred.squeeze())
+      loss = crit(y.squeeze(), y_pred.squeeze())
       loss.backward()
       
       fit_iter.set_description(f'epoch {e}')
@@ -159,46 +159,57 @@ def snapto(x: Tensor):
    return x
 
 def evaluate(m: Module, X:Tensor, y:Tensor):
-   y_eval = m(X)
-   assert (y.shape == y_eval.squeeze().shape)
+   y = y.flatten()
+   y_eval = m(X).flatten()
+   # assert (y.shape == y_eval.squeeze().shape), f'{y.shape} != {y_eval.squeeze().shape}'
    
    count = lambda *bool_exprs: reduce(torch.logical_and, bool_exprs).int().count_nonzero().item()
    select = lambda array, *bool_exprs: array[reduce(torch.logical_and, bool_exprs)]
    
-   labels = y.argmax(dim=1)
-   pred_labels = y_eval.argmax(dim=1)
-   q_p = (labels == 1)
-   q_l = (labels == 0)
-   matched:BoolTensor = (pred_labels == labels)
+   labels = quantize(y, 3)
+   pred_labels = quantize(y_eval, 3)
    
-   n_p, n_l = count(q_p), count(q_l)
-   n_matched, n_correct_p, n_correct_l = (
-      count(matched),
-      count(matched, q_p),
-      count(matched, q_l)
-   )
+   matched = (labels == pred_labels)
+   mismatched = (pred_labels != labels)
    
-   n_false_p, n_false_l = (
-      count(torch.logical_not(matched), pred_labels == 1),
-      count(torch.logical_not(matched), pred_labels == 0)
-   )
+   # print(len(y_eval), count(matched), count(mismatched))
+   # print(matched.numpy())
+   # q_p = (labels == 1)
+   # q_l = (labels == 0)
+   # matched:BoolTensor = (pred_labels == labels)
    
-   misidentified = count(pred_labels == 1, labels == 0) + count(labels == 1, pred_labels == 0)
+   n_p, n_l = count(labels == 2), count(labels == 1)
+   n_e = count(labels == 0)
    
-   misids = safe_div(misidentified, n_p+n_l)
+   # n_matched, n_correct_p, n_correct_l = (
+   #    count(matched),
+   #    count(matched, q_p),
+   #    count(matched, q_l)
+   # )
+   
+   # n_false_p, n_false_l = (
+   #    count(torch.logical_not(matched), pred_labels == 1),
+   #    count(torch.logical_not(matched), pred_labels == 0)
+   # )
+   
+   # misidentified = count(pred_labels == 1, labels == 0) + count(labels == 1, pred_labels == 0)
+   
+   # misids = safe_div(misidentified, n_p+n_l)
 
-   accuracy = safe_div(n_correct_p + n_correct_l, n_p + n_l) * 100
+   # accuracy = safe_div(n_correct_p + n_correct_l, n_p + n_l) * 100
    
-   pct_pos_p = safe_div(n_correct_p, n_p)
-   pct_pos_l = safe_div(n_correct_l, n_l)
+   # pct_pos_p = safe_div(n_correct_p, n_p)
+   # pct_pos_l = safe_div(n_correct_l, n_l)
    
-   accuracy = (pct_pos_p + pct_pos_l) - misids
+   # accuracy = (pct_pos_p + pct_pos_l) - misids
+   nM, nMM = count(matched), count(mismatched)
+   accuracy = (nM / len(labels))
    
    return Struct(
       score=accuracy,
-      p=safe_div(n_correct_p, n_p),
-      l=safe_div(n_correct_l, n_l),
-      false_positives=misids
+      p=safe_div(count(matched, pred_labels == 2), n_p),
+      l=safe_div(count(matched, pred_labels == 1), n_l),
+      false_positives=nMM
    )
    
 from dataclasses import dataclass, asdict
@@ -300,10 +311,10 @@ def shotgun_strategy(config:ExperimentConfig, **kwargs):
    else:
       X, y, X_test, y_test = config.X_train, config.y_train, config.X_test, config.y_test
 
-   core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
+   core_kw = dict(in_channels=num_input_channels, num_pred_classes=config.num_predicted_classes)
 
    model_cores = [
-      ResNetBaseline,
+      # ResNetBaseline,
       FCNBaseline,
    ]
 
@@ -318,7 +329,10 @@ def shotgun_strategy(config:ExperimentConfig, **kwargs):
    ]
 
    losses = [
-      BCEWithLogitsLoss
+      # torch.nn.BCELoss,
+      MSELoss,
+      L1Loss,
+      # BCEWithLogitsLoss
    ]
 
    combos = list(itertools.product(model_cores, rates, losses))
@@ -554,9 +568,9 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
    proto = proto if proto is not None else ExperimentConfig(
       in_seq_len = kwargs.pop('in_seq_len', 14),
       num_input_channels = kwargs.pop('num_input_channels', 5),
-      num_predicted_classes=2,
-      epochs=kwargs.pop('epochs', 8),
-      val_split=0.4
+      num_predicted_classes=3,
+      epochs=kwargs.pop('epochs', 7),
+      val_split=0.15
    )
    
    symbols = thunkv(symbols) if (symbols is not None) else [
@@ -580,14 +594,14 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
    
    model = best_loop['model']
    
-   n_eval_symbols = kwargs.pop('n_eval_symbols', 25)
+   n_eval_symbols = kwargs.pop('n_eval_symbols', 50)
    elogs = evaluate_loop(loop=best_loop, n_symbols=n_eval_symbols)
    
    import matplotlib.pyplot as plt
    
    return symbols, best_loop, elogs
 
-def generate_ensemble_components(n_winners=25, n_symbols=3, filter_symols=None, **kwargs):
+def generate_ensemble_components(n_winners=25, n_symbols=7, filter_symols=None, **kwargs):
    import random as rand
    all_symbols = list_stonks('./sp100')
    
@@ -714,7 +728,8 @@ def assemble_pretrained_ensemble(res_path):
    )
    
    for sym in list_stonks('./sp100'):
-      backtest(sym, model=ensemble)
+      backtest(sym, model=ensemble, pos_type='long')
+      #TODO: test with pos_type='both'
    
    return ensemble
 
@@ -728,7 +743,7 @@ if __name__ == '__main__':
       
    elif 'ensemble' in argv:
       rebuild = ('rebuild' in argv)
-      ensemble_stage2(rebuild=rebuild)
+      ensemble_stage2(symbols=list_stonks('./sp100'), rebuild=rebuild)
       exit()
       
    elif 'ensemble-3' in argv:
