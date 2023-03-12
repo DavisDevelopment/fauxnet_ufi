@@ -78,14 +78,21 @@ def hasmethod(o, name):
 def ismapping(o):
    return hasmethod(o, 'items') and hasmethod(o, 'keys') and hasmethod(o, 'values')
 
-def flat(lol):
+def flat(lol, lvl=0, depth=None):
    fl = []
    for items in lol:
       if isinstance(items, list):
-         items = flat(items)
+         if depth is None:
+            items = flat(items)
+         else:
+            if lvl < depth:
+               items = flat(items, lvl=lvl+1, depth=depth)
+            else:
+               items = [items]
+            
       else:
-         # item = items
          items = [items]
+      
       fl.extend(items)
    return fl
 

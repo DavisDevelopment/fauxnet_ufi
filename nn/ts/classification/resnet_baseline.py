@@ -19,7 +19,7 @@ class ResNetBaseline(nn.Module):
         The number of output classes
     """
 
-    def __init__(self, in_channels: int, mid_channels: int = 64,
+    def __init__(self, in_channels: int, mid_channels: int = 32,
                  num_pred_classes: int = 1) -> None:
         super().__init__()
 
@@ -59,6 +59,7 @@ class ResNetBlock(nn.Module):
         ])
 
         self.match_channels = False
+        
         if in_channels != out_channels:
             self.match_channels = True
             self.residual = nn.Sequential(*[

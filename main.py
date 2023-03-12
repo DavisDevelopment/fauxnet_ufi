@@ -1,3 +1,4 @@
+from olbi import printing
 
 import itertools
 from functools import reduce, wraps
@@ -24,16 +25,16 @@ from pandas import DataFrame
 from typing import *
 from nn.ts.classification.fcn_baseline import FCNBaseline2D, FCNNaccBaseline
 # from nn.arch.transformer.TransformerDataset import TransformerDataset, generate_square_subsequent_mask
-from tools import Struct, gets, maxby, minby, unzip, safe_div, argminby, argmaxby
+from tools import Struct, dotget, gets, maxby, minby, unzip, safe_div, argminby, argmaxby
 from nn.arch.lstm_vae import *
 import torch.nn.functional as F
 from nn.ts.classification import LinearBaseline, FCNBaseline, InceptionModel, ResNetBaseline
 from nn.arch.transformer.TransformerDataset import generate_square_subsequent_mask
 
 from sklearn.preprocessing import MinMaxScaler
-from ttools.thunk import thunkv
+from ttools.thunk import Thunk, thunkv, thunk
 
-def list_stonks(stonk_dir='./stonks', shuffle=True):
+def list_stonks(stonk_dir='./stonks', shuffle=True)->List[str]:
    from pathlib import Path
    from random import shuffle
    
@@ -42,7 +43,7 @@ def list_stonks(stonk_dir='./stonks', shuffle=True):
    
    return tickers
 
-def load_frame(sym:str, dir='./stonks'):
+def load_frame(sym:str, dir='./stonks')->DataFrame:
    #* read the DataFrame from the filesystem
    df:DataFrame = pd.read_feather(P.join(dir, '%s.feather' % sym))
    
@@ -86,26 +87,26 @@ from nn.optim import ScheduledOptim, Checkpoints
 
 max_epochs = 100
 
-def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=None, lr=0.001, epochs=None):
+def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=None, lr=0.001, epochs=None, eval_symbols=None, on_sampler=None, **kwargs):
+   import random as rand
    assert criterion is not None
    epochs = epochs if epochs is not None else max_epochs
    
    inner_optimizer = torch.optim.Adam(model.parameters(), lr=lr)
    optimizer = Checkpoints(
       model,
-      inner_optimizer,
-
-      # ScheduledOptim(
-      #    inner_optimizer, 
-      #    lr_init=lr, 
-      #    n_warmup_steps=20
-      # )
+      inner_optimizer
    )
    optimizer.n_warmup_steps = 2
+   
    crit = criterion
 
    fit_iter = tqdm(range(epochs))
    metric_logs = OrderedDict()
+   
+   eval_symbol = rand.choice(eval_symbols if eval_symbols is not None else list_stonks('./sp100'))
+   do_evaluation = (eval_X is not None and eval_y is not None) or (eval_symbols is not None)
+   fast_evaluation = kwargs.pop('fast_evaluation', eval_symbols is None)
    
    for e in fit_iter:
       optimizer.zero_grad()
@@ -119,13 +120,23 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
       
       le = metric_logs[e] = Struct(epoch=e, loss=loss.detach().item(), accuracy=None)
       
-      if not (eval_X is None or eval_y is None):
-         eval_metrics = evaluate(model, eval_X, eval_y)
-         le.metrics = tuple(f'{n:.2f}' for n in (eval_metrics.p, eval_metrics.l, eval_metrics.false_positives)) #type: ignore
-         le.n_pos_ids_P = eval_metrics.p #type: ignore
-         le.n_pos_ids_L = eval_metrics.l #type: ignore
-         le.total_neg_ids = eval_metrics.false_positives #type: ignore
-         le.accuracy = eval_metrics.score #type: ignore
+      if do_evaluation:
+         if eval_symbols is None or fast_evaluation:
+            eval_metrics = evaluate(model, eval_X, eval_y)
+            le.metrics = tuple(f'{n:.2f}' for n in (eval_metrics.p, eval_metrics.l, eval_metrics.false_positives)) #type: ignore
+            le.n_pos_ids_P = eval_metrics.p #type: ignore
+            le.n_pos_ids_L = eval_metrics.l #type: ignore
+            le.total_neg_ids = eval_metrics.false_positives #type: ignore
+            le.accuracy = eval_metrics.score #type: ignore
+         
+         else:
+            with printing(False):
+               le.accuracy = trading_score( #type: ignore
+                  model=model,
+                  eval_symbols=[eval_symbol], 
+                  on_sampler=on_sampler, 
+               ) 
+            
          le = le.asdict()
          fit_iter.set_postfix(le)
 
@@ -266,8 +277,22 @@ def prep_data_for(config:ExperimentConfig):
    
    return X_train, y_train, X_test, y_test
    
+def trading_score(eval_symbols=None, on_sampler=None, model=None):
+   assert eval_symbols is not None
+   assert model is not None
+   
+   from coinflip_backtest import backtest
+   logs = []
+   for sym in eval_symbols:
+      testres = backtest(stock=sym, model=model, on_sampler=on_sampler)
+      logs.append(dict(symbol=sym, score=testres.score))
+   
+   logs = pd.DataFrame.from_records(logs)
+   print(logs)
+   
+   return logs.score.mean()
 
-def shotgun_strategy(config:ExperimentConfig):
+def shotgun_strategy(config:ExperimentConfig, **kwargs):
    # df = load_frame('MSFT')[['open', 'high', 'low', 'close']]
    num_input_channels, in_seq_len, out_seq_len = config.num_input_channels, config.in_seq_len, config.out_seq_len
    if config.X_train is None:
@@ -278,17 +303,17 @@ def shotgun_strategy(config:ExperimentConfig):
    core_kw = dict(in_channels=num_input_channels, num_pred_classes=2)
 
    model_cores = [
-      # ResNetBaseline,
+      ResNetBaseline,
       FCNBaseline,
    ]
 
    rates = [
       # 0.00005,
+      0.0001,
       0.0006,
       0.001,
       0.0015,
       0.002,
-      # 0.0001,
       # 0.00015,
    ]
 
@@ -304,7 +329,7 @@ def shotgun_strategy(config:ExperimentConfig):
          rate,
          crit_factory(),
          Sequential(
-            Dropout(p=0.05), #? randomly zero-out 5% of inputs
+            # Dropout(p=0.32333), #? randomly zero-out 5% of inputs
             base_factory(**core_kw)
          )
       )
@@ -316,39 +341,50 @@ def shotgun_strategy(config:ExperimentConfig):
    
    from nn.data.sampler import DataFrameSampler
    
-   def on_sampler(sampler):
-      from nn.data.sampler import add_indicators
+   on_sampler = kwargs.pop('on_sampler', None)
+   if on_sampler is None:
+      def on_sampler(sampler):
+         from nn.data.sampler import add_indicators
+         
+         #* constrain evaluation period to most recent 365 days
+         mints, maxts = sampler.date_range()
+         mints = (maxts - pd.DateOffset(days=365))
+         
+         sampler.configure(
+            in_seq_len=config.in_seq_len,
+            min_ts=mints
+         )
       
-      #* constrain evaluation period to most recent 365 days
-      mints, maxts = sampler.date_range()
-      mints = (maxts - pd.DateOffset(days=365))
-      
-      sampler.configure(
-         in_seq_len=config.in_seq_len,
-         min_ts=mints
-      )
+   eval_symbols = kwargs.pop('eval_symbols', None)
       
    #* for each variation of the configuration
    for mventry in model_variants:
       base_ctor, learn_rate, criterion, model = mventry
       model:Sequential = model
-      hist, _ = fit(model, X, y, criterion=criterion, eval_X=X_test, eval_y=y_test, lr=learn_rate, epochs=config.epochs)
-      metrics:Struct = evaluate(model, X_test, y_test)
-      hist:DataFrame
-
-      # print('\n'.join([
-      #    f'baseline="{base_ctor.__qualname__}"', 
-      #    f'learn_rate={learn_rate}', 
-      #    f'loss_fn={criterion}'
-      # ]))
-      # print('final accuracy score:', metrics.score)#type: ignore
+      print('\n'.join([
+         f'baseline="{base_ctor.__qualname__}"', 
+         f'learn_rate={learn_rate}', 
+         f'loss_fn={criterion}'
+      ]))
+      
+      hist, _ = fit(model, X, y, 
+                    criterion=criterion, 
+                    eval_X=X_test, 
+                    eval_y=y_test, 
+                    lr=learn_rate, 
+                    epochs=config.epochs, 
+                    
+                    eval_symbols=eval_symbols, 
+                    on_sampler=on_sampler,
+                    fast_evaluation=True
+                  )
       
       from coinflip_backtest import backtest
       
       #TODO: backtest on multiple symbols for a more informative performance summary
-      trading_perf = backtest(stock=config.symbol, model=model, on_sampler=on_sampler)
+      testres = backtest(stock=config.symbol, model=model, on_sampler=on_sampler)
       
-      entry_score = float(trading_perf.score)
+      entry_score = float(testres.score)
       
       #* store some info on this permutation of the model
       experiments.append(dict(
@@ -357,7 +393,7 @@ def shotgun_strategy(config:ExperimentConfig):
          mdl_config=Struct(loss_type=criterion, model_type=base_ctor.__qualname__),
          exp_config=config,
          score=entry_score,
-         did_beat_market=trading_perf.did_beat_market,
+         did_beat_market=(testres.did_beat_market and testres.did_place_orders),
          logs=hist
       ))
 
@@ -368,13 +404,6 @@ def shotgun_strategy(config:ExperimentConfig):
    best_loop = maxby(experiments, key=lambda e: e['score'])
    
    score, model, mdl_config = gets(best_loop, 'score', 'model', 'mdl_config')
-
-   #* save the best-qualified classifier permutation
-   # torch.save(model.state_dict(), './classifier_pretrained_state')
-   # torch.save(model, './classifier_pretrained.pt')
-   # accuracy = evaluate(model, X_test, y_test)
-
-   # print('accuracy of final exported model is ', accuracy)
    
    return best_loop
 
@@ -409,9 +438,6 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
          roi=trade_sess.roi
       ))
       
-      if not trade_sess.did_beat_market:
-         continue
-      
       logs:pd.Series = trade_sess.trade_logs #type: ignore
       logs['datetime'] = logs.index
       
@@ -419,8 +445,21 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
       final_roi_held = trade_sess.baseline_roi
       final_roi_traded = trade_sess.roi
       advantage = (final_roi_traded - final_roi_held)/final_roi_held*100.0
+      absadv = abs(advantage)
+      print('Agent ', colored('over' if advantage > 0 else 'under', attrs=['bold']) + f'performed by {absadv:.2f}%')
       
-      if final_roi_traded == 1.0 and not any(logs.roi != 1.0):
+      #* store information about this eval-iteration
+      elogs.append(dict(
+         symbol=symbol,
+         roi=final_roi_traded,
+         baseline_roi=final_roi_held,
+         score=advantage
+      ))
+      
+      if not trade_sess.did_beat_market:
+         continue
+      
+      elif final_roi_traded == 1.0 and not any(logs.roi != 1.0):
          #* skip iterations for which the Agent never receives a BUY signal
          #? ... which I could be doing in a more conceptually direct way
          continue
@@ -444,14 +483,6 @@ def evaluate_loop(model=None, loop=None, symbols=None, n_symbols=None):
          #* when an exception is raised during plotting, print the data we were trying to plot for debugging purposes
          print(logs)
          pprint(error)
-      
-      #* store information about this eval-iteration
-      elogs.append(dict(
-         symbol=symbol,
-         roi=final_roi_traded,
-         baseline_roi=final_roi_held,
-         score=advantage
-      ))
       
       print(f'BEAT THE MARKET by {advantage:,.2f}% on {symbol}')
    
@@ -528,7 +559,7 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
       val_split=0.4
    )
    
-   symbols = (symbols if not callable(symbols) else symbols()) if (symbols is not None) else [
+   symbols = thunkv(symbols) if (symbols is not None) else [
       'MSFT', 'GOOG', 'AAPL',
    ]
    
@@ -542,11 +573,10 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
    from datatools import training_suitability
    
    #* select from only the most 'suitable' datasets for evaluation
-   # most_suited = minby(symbols, lambda sym: training_suitability(load_frame(sym, './sp100')))
-   most_suited = rand.choice(symbols)
+   most_suiteds = topk(2, symbols, lambda sym: training_suitability(load_frame(sym, './sp100')))
    
-   print(f'Most suitable symbol is {most_suited}')
-   best_loop = shotgun_strategy(proto.extend(symbol=most_suited))
+   print(f'Most suitable symbol is {most_suiteds}')
+   best_loop = shotgun_strategy(proto.extend(symbol=rand.choice(most_suiteds)), eval_symbols=most_suiteds)
    
    model = best_loop['model']
    
@@ -557,7 +587,7 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
    
    return symbols, best_loop, elogs
 
-def ensemble_stage3(n_winners=5, n_symbols=4, filter_symols=None, **kwargs):
+def generate_ensemble_components(n_winners=25, n_symbols=3, filter_symols=None, **kwargs):
    import random as rand
    all_symbols = list_stonks('./sp100')
    
@@ -571,15 +601,19 @@ def ensemble_stage3(n_winners=5, n_symbols=4, filter_symols=None, **kwargs):
    break_meter = 0
    
    while len(viable) < n_winners:
+      #TODO: when a winning model is generated, ensure that all info necessary to replicate the winning results is provided, 
+      #TODO ... and pass that configuration to another routine to be mutated iteratively, searching for improvements
+      
       try: #* keyboardinterrupt try/catch block
-         symbols = lambda : (bsymbols if bsymbols is not None else rand.sample(all_symbols, n_symbols))
-         print('\n\n', colored('SYMBOLS=', 'cyan', attrs=['bold']), '   ', colored(f'{thunkv(symbols)}', 'yellow'), '\n\n')
+         symbols = thunk(lambda : (bsymbols if bsymbols is not None else []) + rand.sample(all_symbols, n_symbols))
+         
+         print('\n\n', colored('SYMBOLS=', 'cyan', attrs=['bold']), '   ', colored(f'{symbols}', 'yellow'), '\n\n')
          
          tbeg = time()
          symbols, winner, elogs = ensemble_stage2(
-            symbols=symbols, 
-            epochs=4,
-            n_eval_symbols=10
+            symbols=symbols,
+            epochs=72,#rand.randint(2, 6),
+            n_eval_symbols=50
          )
          tend = time()
          
@@ -610,9 +644,15 @@ def ensemble_stage3(n_winners=5, n_symbols=4, filter_symols=None, **kwargs):
          viable_logs.sort_values('score', ascending=False, inplace=True)
          
          print(viable_logs)
+         numb = lambda num: colored(f'{num}', 'yellow', attrs=['bold'])
+         punc = lambda sym: colored(f'{sym}', 'magenta', attrs=['bold'])
          
          if len(viable_logs) > 0:
-            print(colored('QUALIFIED!!', 'green', attrs=['bold']))
+            print(
+               colored('QUALIFIED!!', 'green', attrs=['bold']), '\n - ', 
+               (numb(len(viable_logs)) + ' ' + punc('/') + ' ' + numb(len(elogs))),
+               colored(' passed', 'green', attrs=['bold']),
+            )
             
             viable.append(dict(
                symbols=symbols[:],
@@ -622,7 +662,7 @@ def ensemble_stage3(n_winners=5, n_symbols=4, filter_symols=None, **kwargs):
             
             print(len(viable), ' viable candidates generated so far')
             print('candidate symbols are ', symbols)
-            input()
+            # input()
             
          #* each time a full iteration completes organically, decrement the BREAK-meter
          break_meter -= 1
@@ -635,11 +675,13 @@ def ensemble_stage3(n_winners=5, n_symbols=4, filter_symols=None, **kwargs):
             break
          else:
             continue
+   
+   results_path = './ensemble_viable_results.pt'#'./ensemble3_results.pickle'
+   torch.save(viable, results_path)
       
    results:DataFrame = DataFrame.from_records(viable)
-   print(results)
-   results_path = './ensemble3_results.pickle'
-   results.to_pickle(results_path)
+   # print(results)
+   # results.to_pickle(results_path)
    
    print('Ensemble-3 results persisted to filesystem at %s' % results_path)
    
@@ -652,11 +694,29 @@ def ensemble_stage4(stage3_results:DataFrame, **kwargs):
    
    r['loop']
    
-def polysym(train_x, train_y, test_x, test_y):
-   model = FCNBaseline2D(5, 2)
-   print(model)
-   print(train_y.shape)
-   model = fit(model, train_x, train_y, criterion=BCEWithLogitsLoss(), eval_X=test_x, eval_y=test_y, lr=0.0005, epochs=10)
+def assemble_pretrained_ensemble(res_path):
+   data = torch.load(res_path)
+   components = []
+   
+   for i, entry in enumerate(data):
+      model, model_state = dotget(entry, 'loop.model'), dotget(entry, 'loop.model_state')
+      model:torch.nn.Module
+      assert None not in (model, model_state)
+      model.load_state_dict(model_state)
+      
+      components.append(model)
+      
+   print(components)
+   from nn.arch.ensemble import TsClassifyingEnsemble
+   
+   ensemble = TsClassifyingEnsemble(
+      components=components,
+   )
+   
+   for sym in list_stonks('./sp100'):
+      backtest(sym, model=ensemble)
+   
+   return ensemble
 
 if __name__ == '__main__':
    import sys 
@@ -672,14 +732,11 @@ if __name__ == '__main__':
       exit()
       
    elif 'ensemble-3' in argv:
-      ensemble_stage3()
+      generate_ensemble_components()
       exit()
       
    else:
-      from nn.data.agg import polysymbolic_dataset
+      assemble_pretrained_ensemble('ensemble_viable_results.pt')
       
-      train_x, train_y, test_x, test_y = polysymbolic_dataset('sp100_daily.pickle')
-      
-      polysym(train_x, train_y, test_x, test_y)
    
    

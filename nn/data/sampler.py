@@ -171,9 +171,15 @@ class DataFrameSampler:
          y_delta = y_next - y_cur
          y_pct = y_delta / y_cur * 100.0
          
+         y_lbl = -1
+         if y_pct > 0.0:
+            y_lbl = 1
+         elif y_pct < 0.0:
+            y_lbl = 0
+         
          #TODO return the classification for `y_pct` instead of returning `y_pct`
          
-         yield tstamp, X, y_pct
+         yield tstamp, X, y_lbl
          
       def pack(self):
          times = []

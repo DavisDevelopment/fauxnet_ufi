@@ -65,11 +65,15 @@ class Thunk(Generic[T]):
    def __getattr__(self, name:str):
       return Thunk(lambda : getattr(self.get(), name))
    
-   def __getitem__(self, index:Union[Thunk[Any], Any])->Thunk[Any]:
-         
+   def __getitem__(self, index:Any):
+      return Thunk(lambda : operator.getitem(self.get(), thunkv(index)))
+   
 binary_operators = [
-   'add', 'sub', 'mul', 'div',
-   'eq', 'ne', 'lt', 'gt'
+   'add', 'sub', 'mul', 'div', 'mod', 'pow',
+   'eq', 'ne', 'lt', 'gt',
+   'rshift', 'lshift', 
+   
+   # 'and', 'or', 'xor'
 ]
 
 def wrappedBinOp(opfn):
@@ -84,11 +88,38 @@ for op in binary_operators:
    dundername = f'__{op}__'
    # operato
    method = getattr(operator, ({
-      'div': 'truediv'
+      'div': 'truediv',
+      'land': 'and_',
+      'lor': 'or_',
    }).get(op, op))
    
    setattr(Thunk, dundername, wrappedBinOp(method))
    
+import builtins as g
+import inspect as reflect
+   
+unary_operators = [
+   operator.__index__,
+   ('__str__', g.str),
+   ('__bool__', g.bool),
+   ('__int__', g.int),
+   ('__float__', g.float),
+   ('__len__', g.len)
+]
+
+def wrappedUnaryOp(fn):
+   if isinstance(fn, tuple) and len(fn) == 2:
+      fname, fn = fn
+   elif callable(fn):
+      fname = fn.__name__
+   
+   def op_method(self:Thunk[Any]):
+      return Thunk(lambda : fn(self.get()))
+   
+   return fname, op_method
+
+for u in unary_operators:
+   fname, method = wrappedUnaryOp(u)
          
 # def thunk(init):
 #    raise Exception('Stub')
@@ -103,4 +134,6 @@ def thunk(v, *context_vars, **kwargs):
    if len(context_vars) > 0:
       if not callable(v):
          raise TypeError('thunk(), when called with more than one argument, must provide a callable as the first argument')
-      return Thunk(partial(v, *context_vars))
+      return Thunk(partial(v, *context_vars), **kwargs)
+   else:
+      return Thunk(v, **kwargs)

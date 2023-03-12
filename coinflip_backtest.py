@@ -164,16 +164,17 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
       model_state = torch.load('./classifier_pretrained_state')
       model = torch.load('./classifier_pretrained.pt')
       model.load_state_dict(model_state)
-      print(model)
+      # print(model)
    
    bal_init = stock.close.iloc[0]
    logs, balances = run_backtest(model, stock, init_balance=bal_init, pos_type=pos_type)
+   
    blogs = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
    blogs = blogs.set_index('datetime', drop=True)
    
    close = stock.loc[blogs.index]['close']
    blogs['close'] = close
-   
+   blogs['delta'] = close.pct_change()
    close_init = close.iloc[0]
    close_final = close.iloc[-1]
    baseline_roi = float(close_final / close_init)
@@ -196,13 +197,21 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
    
    score = (final_roi - baseline_roi) / final_roi * 100.0
    
+   did_place_orders = (len(logs) > 1)
    did_beat_market = (vs_market > 1)
+   won = (did_beat_market and did_place_orders)
+   
+   print(
+      colored('is winner: ', 'green', 'on_blue', attrs=['bold', 'dark', 'underline']), 
+      colored(str(won), 'green' if won else 'red', attrs=['bold'])
+   )
    
    return Struct(
       pl_ratio=pl_ratio, 
       roi=final_roi,
       baseline_roi=baseline_roi,
       trade_logs=blogs,
+      score=score,
       did_beat_market=did_beat_market,
-      score=score
+      did_place_orders=did_place_orders,
    )

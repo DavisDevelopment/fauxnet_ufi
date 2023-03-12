@@ -428,7 +428,7 @@ def pl_binary_labeling(y: ndarray):
    labels = np.zeros((len(y), 2))
    
    ydelta = percent_change(y)
-   thresh = 0.8
+   thresh = 0.06 #* (0.006%)
    
    E = np.argwhere((ydelta <= thresh)&(ydelta >= -thresh))
    P = np.argwhere(ydelta > thresh)
@@ -455,21 +455,37 @@ def norm_batches(x: Tensor):
          res[i] = scaled_batch
       return res
    
-def training_suitability(df: DataFrame)->float:
-   # from math import 
-   deltas = df['close'].pct_change().iloc[1:]
+# def training_suitability(df: DataFrame)->float:
+#    # from math import 
+#    d = df['close'].pct_change().iloc[1:]
+#    U = d[d > 0]
+#    D = d[d < 0].abs()
    
-   U = []
-   D = []
+#    mP, mL = U.mean(), D.mean()
    
-   for i in range(len(deltas)):
-      mv = deltas[i]
-      if mv > 0:
-         U.append(mv)
-      elif mv < 0:
-         D.append(abs(mv))
+#    U = []
+#    D = []
+   
+#    for i in range(len(d)):
+#       mv = d[i]
+#       if mv > 0:
+#          U.append(mv)
+#       elif mv < 0:
+#          D.append(abs(mv))
          
-   U, D = np.array(U), np.array(D)
-   nU, nD = len(U), len(D)
+#    U, D = np.array(U), np.array(D)
+#    nU, nD = len(U), len(D)
    
-   return (nU / nD)
+#    return (nU / nD)
+
+def training_suitability(df: DataFrame):
+   d = df['close'].pct_change().iloc[1:]
+   thresh = 0.006
+   
+   U = d[d > thresh]
+   D = d[d < -thresh].abs()
+   
+   mP, mL = U.mean(), D.mean()
+   nP, nL, nA = len(U), len(D), len(df)-1
+   coverage = (nP + nL)/nA
+   return coverage
