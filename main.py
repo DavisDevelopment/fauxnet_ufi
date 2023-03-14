@@ -126,7 +126,7 @@ def fit(model:Module, X:Tensor, y:Tensor, criterion=None, eval_X=None, eval_y=No
             le.metrics = tuple(f'{n:.2f}' for n in (eval_metrics.p, eval_metrics.l, eval_metrics.false_positives)) #type: ignore
             le.n_pos_ids_P = eval_metrics.p #type: ignore
             le.n_pos_ids_L = eval_metrics.l #type: ignore
-            le.total_neg_ids = eval_metrics.false_positives #type: ignore
+            le.total_neg_ids = (eval_metrics.false_positives / len(eval_y)) #type: ignore
             le.accuracy = eval_metrics.score #type: ignore
          
          else:
@@ -314,17 +314,19 @@ def shotgun_strategy(config:ExperimentConfig, **kwargs):
    core_kw = dict(in_channels=num_input_channels, num_pred_classes=config.num_predicted_classes)
 
    model_cores = [
-      # ResNetBaseline,
+      ResNetBaseline,
       FCNBaseline,
    ]
 
    rates = [
-      # 0.00005,
-      0.0001,
       0.0006,
       0.001,
       0.0015,
       0.002,
+      0.00225,
+      # 0.001,
+      # 0.0015,
+      # 0.002,
       # 0.00015,
    ]
 
@@ -601,7 +603,7 @@ def ensemble_stage2(symbols=None, proto=None, cache_as='ensemble', rebuild=False
    
    return symbols, best_loop, elogs
 
-def generate_ensemble_components(n_winners=25, n_symbols=7, filter_symols=None, **kwargs):
+def generate_ensemble_components(n_winners=25, n_symbols=25, filter_symols=None, **kwargs):
    import random as rand
    all_symbols = list_stonks('./sp100')
    
@@ -626,7 +628,7 @@ def generate_ensemble_components(n_winners=25, n_symbols=7, filter_symols=None, 
          tbeg = time()
          symbols, winner, elogs = ensemble_stage2(
             symbols=symbols,
-            epochs=72,#rand.randint(2, 6),
+            epochs=100,#rand.randint(2, 6),
             n_eval_symbols=50
          )
          tend = time()

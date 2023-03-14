@@ -58,7 +58,7 @@ def prep_frame(df:DataFrame, config:ExperimentConfig, fmt=2):
 
    ynp = ynp
    if fmt == 2:
-      ynp:ndarray = pl_trinary_labeling(ynp[:, 3], fmt=2)
+      ynp:ndarray = pl_trinary_labeling(ynp[:, 3], thresh=0.01, fmt=2)
       print(ynp)
    else:
       ynp:ndarray = pl_binary_labeling(ynp[:, 3])

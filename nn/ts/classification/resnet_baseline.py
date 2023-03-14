@@ -19,7 +19,7 @@ class ResNetBaseline(nn.Module):
         The number of output classes
     """
 
-    def __init__(self, in_channels: int, mid_channels: int = 32,
+    def __init__(self, in_channels: int, mid_channels: int = 3,
                  num_pred_classes: int = 1) -> None:
         super().__init__()
 
@@ -29,18 +29,24 @@ class ResNetBaseline(nn.Module):
             'num_pred_classes': num_pred_classes
         }
 
-        self.layers = nn.Sequential(*[
-            ResNetBlock(in_channels=in_channels, out_channels=mid_channels),
-            ResNetBlock(in_channels=mid_channels, out_channels=mid_channels * 2),
-            ResNetBlock(in_channels=mid_channels * 2, out_channels=mid_channels * 2),
-            ResNetBlock(in_channels=mid_channels * 2, out_channels=mid_channels * 2),
-
-        ])
-        self.final = nn.Linear(mid_channels * 2, num_pred_classes)
+        block_channels = [
+            (in_channels, mid_channels*2),
+        ]
+        n_hidden_blocks = 2
+        block_channels += [(mid_channels*2, mid_channels*2)] * n_hidden_blocks
+        block_channels += [(mid_channels*2, mid_channels)]
+        
+        self.network_blocks = [ResNetBlock(in_channels=in_channels, out_channels=out_channels) for in_channels, out_channels in block_channels]
+        
+        self.head = nn.Sequential(*self.network_blocks)
+        self.tail = nn.Linear(block_channels[-1][1], 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
-        x = self.layers(x)
-        return self.final(x.mean(dim=-1))
+        x = self.head(x)
+        x = x.mean(dim=-1)
+        y = self.tail(x)
+        
+        return y
 
 def no_op(x: torch.Tensor) -> torch.Tensor:
     return x
@@ -71,7 +77,12 @@ class ResNetBlock(nn.Module):
             self.residual = no_op
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
-
+        inputs:torch.Tensor = x#torch.clone(x)
+        
         if self.match_channels:
-            return self.layers(x) + self.residual(x)
-        return self.layers(x)
+            _x = self.layers(inputs) + self.residual(inputs)
+            # _x = (_x + self.residual(inputs)
+        else:
+            _x = self.layers(inputs)
+        
+        return _x

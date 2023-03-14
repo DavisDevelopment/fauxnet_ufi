@@ -21,7 +21,7 @@ class FCNBaseline(nn.Module):
         The number of output classes
     """
 
-    def __init__(self, in_channels: int, num_pred_classes: int = 1) -> None:
+    def __init__(self, in_channels: int, num_pred_classes: int = 1, tail_encoder=None) -> None:
         super().__init__()
 
         # for easier saving and loading
@@ -42,12 +42,25 @@ class FCNBaseline(nn.Module):
         
         self.network_layers = [ConvBlock(*args) for args in blocks]
         
-        self.tail = nn.Sequential(
-            nn.Linear(8, 1)
-        )
-        #? should this be a Neural Accumulator?
+        if tail_encoder is not None:
+            if tail_encoder == -1:
+                from nn.nac import NeuralAccumulatorCell, NacCell
+                self.tail = nn.Sequential(
+                    NeuralAccumulatorCell(8, 12),
+                    NeuralAccumulatorCell(12, 6),
+                    NeuralAccumulatorCell(6, 3)
+                )
+            else:
+                self.tail = tail_encoder
+
+        else:
+            self.tail = nn.Sequential(
+                nn.Linear(8, 8),
+                nn.Linear(8, 1)
+            )
+            #? should this be a Neural Accumulator?
         
-        self.activation = nn.ReLU()
+        self.activation = None#nn.LeakyReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
         input_shape = x.shape

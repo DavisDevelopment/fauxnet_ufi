@@ -330,17 +330,30 @@ def dotget(obj, path: str, default=None):
                value = value[index]
          else:
                return default
+            
       elif isinstance(value, dict):
          if key in value:
                value = value[key]
          else:
                return default
+            
       else:
          if hasattr(value, key):
                value = getattr(value, key)
          else:
                return default
+   
    return value
+
+def dotgets(o, *paths, **kwargs):
+   _gets = [
+      *[(p, None) for p in paths],
+      *[(kw_k, kw_v) for kw_k, kw_v in kwargs.items()]
+   ]
+   
+   return tuple(
+      dotget(o, path=k, default=v) for k, v in _gets
+   )
 
 def getcols(pattern:str, df:pd.DataFrame, tonp=True):
    import fnmatch
@@ -386,7 +399,6 @@ def diffdicts(a, b, equality=opfn.eq, journal_style=False):
 
 
 from tools import closure
-
 
 @closure
 def freeze():
@@ -456,10 +468,57 @@ def unzip(seq):
    return tuple(starmap(pluck, enumerate(seqs)))
 
 def gets(d, *items):
+   if len(items) == 0:
+      items = list(d.keys())
    return tuple(d.get(k, None) for k in items)
+
+def getsmatching(d, pattern='*', regexp=False):
+   import fnmatch, regex
+   
+   key_filter:Callable[[str], bool]
+   if not regexp:
+      pattern = fnmatch.translate(pattern)
+      
+   # else:
+   key_filter = lambda s: (regex.search(pattern, s) is not None)
+   
+   if hasmethod(d, 'keys') and hasmethod(d, '__getitem__'):
+      return keyfilter(key_filter, d)
+   
+   else:
+      d = d.__dict__.copy()
+      
+      return getsmatching(d, pattern=pattern, regexp=regexp)
 
 def sub(d, keys):
    return keyfilter(lambda x: x in keys, d)
+
+def after(s, pref):
+   if (hasmethod(s, 'index') and hasmethod(s, '__getitem__')):
+      try:
+         s_i = s.index(pref)
+
+         if isinstance(s, (str, bytes)):
+            s_i += len(pref)
+         else:
+            s_i += 1
+         return s[s_i:]
+
+      except IndexError as e:
+         print(e)
+         return s
+   
+   return s
+
+def before(s, suff):
+   if (hasmethod(s, 'index') and hasmethod(s, '__getitem__')):
+      try:
+         s_i = s.index(suff)
+      except IndexError as e:
+         print(e)
+         return s
+      
+      return s[:s_i]
 
 class _capctx:
    def __init__(self, owner):

@@ -23,16 +23,6 @@ from numpy import ndarray, unpackbits, packbits
 
 P = os.path
 
-def after(s, pref):
-   if s.startswith(pref):
-      return s[len(pref):]
-   return s
-
-def before(s, suff):
-   if s.endswith(suff):
-      return s[:-len(suff)]
-   return s
-
 def torch_vectorize(f, inplace=False, end_dim=None):
    #TODO: implement this such that it can be jitted by pytorch
    def wrapper(tensor:Tensor, **params) -> Tensor:
