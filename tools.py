@@ -96,6 +96,19 @@ def flat(lol, lvl=0, depth=None):
       fl.extend(items)
    return fl
 
+from collections.abc import MutableMapping
+
+def _flatten_dict_gen(d, parent_key, sep):
+   for k, v in d.items():
+      new_key = parent_key + sep + k if parent_key else k
+      if isinstance(v, MutableMapping):
+         yield from flatten_dict(v, new_key, sep=sep).items()
+      else:
+         yield new_key, v
+
+def flatten_dict(d: MutableMapping, parent_key: str = '', sep: str = '.', factory=dict):
+   return factory(_flatten_dict_gen(d, parent_key, sep))
+
 def maxby(key, seq):
    return sorted(seq, key=key, reverse=True)[0]
 

@@ -1,3 +1,4 @@
+from itertools import groupby
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
@@ -6,11 +7,12 @@ from pandas import DataFrame, Series
 from typing import *
 
 from cytoolz import *
+from cytoolz.dicttoolz import merge, valmap, keymap, keyfilter, valfilter
 from fn import F, _
 
 from inspect import signature, isfunction, Signature
 from datatools import renormalize, rescale
-from tools import closure, dotget, dotgets, before, after, gets, once
+from tools import closure, dotget, dotgets, before, after, gets, isiterable, once
 
 def dfget(df:DataFrame, proto:Union[str, Callable[[DataFrame], Series], Callable[[DataFrame], DataFrame]])->Union[Series, DataFrame]:
    if isinstance(proto, str):
@@ -124,15 +126,23 @@ class ApplyNodes:
       self.silent = False
       
    def __call__(self, df:DataFrame, **kwargs):
+      # nodes = [node.node for node in self.nodes]
+      
       r = df.copy()
       for i, fn in enumerate(self.nodes):
+         node = fn.node
+         print('node.name = ', node.name)
+         nkw = kwargs.pop(node.name, {})
+         
          try:
-            r = fn(r, **kwargs)
+            r = fn(r, **merge(kwargs, nkw))
+            
          except Exception as fatalError:
             if self.silent:
                return None
             else:
                raise fatalError
+      
       return r
 
 ta_method_names = [
@@ -260,8 +270,11 @@ pprint(ta_methods)
 special_cases = {}#TODO
 
 def mkNode(ref:str, fn):
-   fn_categ, fn_name = ref.split('.', maxsplit=2)
-      
+   if '.' in ref:
+      fn_categ, fn_name = ref.split('.', maxsplit=2)
+   else:
+      fn_categ, fn_name = '', ref
+   
    if isfunction(fn):
       sig = signature(fn)
       inputs = []
@@ -321,76 +334,86 @@ def make_indicator_nodes()->Dict[str, Union[Node, Dict[str, Node]]]:
 indicator_nodes = make_indicator_nodes()
 
 import features.ta.volatility as fta
-indicator_nodes['volatility.bbands'] = mkNode('volatility.bbands', fta.bbands)
+indicator_nodes['bbands'] = indicator_nodes['volatility.bbands'] = mkNode('bbands', fta.bbands)
 # indicator_nodes['volatility.donchian'] = mkNode('volatility.donchian', fta.donchian)
 
 from copy import deepcopy
+from fn import F, _
 
-class P:
-   name:Optional[str]
-   ptype:Optional[Type]
-   default:Optional[Any]
-   
-   def __init__(self, ptype:Optional[Type]=None, pvalues=None, default=None):
-      self.name = None
-      self.ptype = ptype
-      self.pvalues = pvalues
-      self.default = default
-      
-   def named(self, n:str):
-      c = deepcopy(self)
-      c.name = n
-      return c
-      
-class Ps:
-   d:Dict[Union[int, str], P]
-   
-   def __init__(self, **decls):
-      self.d = {}
-      
-      self._extend(decls)
-         
-   def _extend(self, o:dict):
-      for k, p in o.items():
-         assert isinstance(k, str)
-         
-         if isinstance(p, P):
-            self.d[k] = p.named(k)
-         
-         else:
-            t = type(p)
-            p = P(t, p)
-            p.name = k
-            self.d[k] = p
-      # return self      
+lrange = lambda *args: np.arange(*args).tolist()
+prefixwith = lambda pref, d: keymap(lambda k: f'{pref}.{k}', d)
 
-parameter_space_proto = Ps(
-   mamode=[
-      "dema", "ema", "fwma", "hma", "linreg", "midpoint", "pwma", "rma",
-      "sinwma", "sma", "swma", "t3", "tema", "trima", "vidya", "wma", "zlma"
-   ],
+def implode(d:MutableMapping):
+   from ttools.unflatten import unflatten
+   return unflatten(d)
+
+def expandps(d:Union[Dict[str, Any], Iterable[Tuple[str, Any]]]):
+   from itertools import product
+   if not isinstance(d, dict):
+      if isiterable(d):
+         items = list(d)
+         for k, subspace in items:
+            if isinstance(subspace, dict):
+               print(expandps(subspace))
+      else:
+         return d
+   else:
+      items = list(d.items())
+   
+   keys = [k for k,_ in items]
+   print(items)
+   combos = list(product(*((v if isiterable(v) else [v]) for k, v in items)))
+   
+   # combos = []
+   grid = [dict(zip(keys, combos[i])) for i in range(len(combos))]
+   
+   print(DataFrame.from_records(grid))
+      
+   return grid
+
+_mamodes = [
+   "dema", "ema", "fwma", "hma", "linreg", "midpoint", "pwma", "rma",
+   "sinwma", "sma", "swma", "t3", "tema", "trima", "vidya", "wma", "zlma"
+]
+
+parameter_space_proto = dict(
    length=[3, 7, 14, 20]
 )
 
-def mkAnalyzer(*indicators):
-   ind_list = [i for i in indicators if isinstance(i, str)]
-   for k in ind_list:
-      assert k in indicator_nodes, f'{k} is not in indicator_nodes'
+pspwstd = merge(parameter_space_proto, {
+   'std': lrange(0.75, 2.0, 0.25)
+})
+
+parameter_space = [
+   merge(
+      prefixwith('bbands', pspwstd),
+      prefixwith('rsi', parameter_space_proto),
+      # prefixwith('zscore', pspwstd),
+      # prefixwith('quantile', merge(parameter_space_proto, dict(
+      #    q=lrange(0.5, 1.0, 0.25)
+      # )))
+   )
+]
+
+def mkAnalyzer(items):
+   if isinstance(items, MutableMapping):
+      items = list(items.items())
+   else:
+      items = [(a, b) for a, b in items]
    
-   features = [ApplyNode(fn) for fn in gets(indicator_nodes, *ind_list) if isinstance(fn, Node)]
+   nodes = []
+   for iid, cfg in items:
+      assert iid in indicator_nodes, f'No Indicator named "{iid}"'
+      node = indicator_nodes[iid]
+      if isinstance(node, Node):
+         apply = ApplyNode(node, **cfg)
+         nodes.append(apply)
+      else:
+         raise TypeError(type(node))
    
-   for feat in features:
-      print(feat)
+   allnode = ApplyNodes(nodes) 
       
-   # for x in indicators:
-   #    if isinstance(x, str):
-   #       features.append(ApplyNode(indicator_nodes[x]))
-   #    else:
-   #       raise ValueError(f'Unhandled {x}')
-   
-   momo = ApplyNodes(features)
-   
-   return momo
+   return allnode
          
 if __name__ == '__main__':
    # nodes = indicators()

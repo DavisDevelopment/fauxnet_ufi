@@ -24,6 +24,8 @@ class TorchRandomForestClassifier(torch.nn.Module):
 
     """
     def __init__(self,  nb_trees:int, nb_samples:int, max_depth=-1, bootstrap=True):
+        super().__init__()
+        
         self.nb_trees = nb_trees
         self.nb_samples = nb_samples
         self.max_depth = max_depth
@@ -105,6 +107,8 @@ class TorchRandomForestRegressor(torch.nn.Module):
 
     """
     def __init__(self,  nb_trees, nb_samples, max_depth=-1, bootstrap=True):
+        super().__init__()
+        
         self.trees = []
         self.trees_features = []
         self.nb_trees = nb_trees

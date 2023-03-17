@@ -1,7 +1,8 @@
 from math import floor
 import numpy as np
+# from numpy import typename
 import torch
-from torch import Tensor, tensor
+from torch import Tensor, tensor, typename
 
 from main import list_stonks, load_frame, ExperimentConfig
 from nn.data.sampler import DataFrameSampler
@@ -15,7 +16,7 @@ from fn import F, _
 from cytoolz import *
 
 from pandas import DataFrame, Series
-from tools import unzip
+from tools import flatten_dict, unzip
 
 def samples_for(symbol:str, seq_len:int, columns:List[str]):
    df:DataFrame = load_frame(symbol, './sp100')
@@ -85,28 +86,65 @@ def split_samples(X, y, pct=0.2, shuffle=True):
    
    return train_X, train_y, test_X, test_y
 
-if __name__ == '__main__':
+from ta_experiments import mkAnalyzer, expandps, implode
+# if __name__ == '__main__':
+def test_indicator_config(symbol:str, items):
    from sklearn.metrics import accuracy_score
-   from ta_experiments import mkAnalyzer
-   indicators = mkAnalyzer('rsi', 'bbands', 'zscore')
-   df = load_frame('AMZN')
+   
+   indicators = mkAnalyzer(items)
+   
+   df = load_frame(symbol)
    print(indicators(df))
-   X, y = samples_for2('AMZN', indicators, xcols_not=['open', 'high', 'low', 'close', 'datetime'])
+   X, y = samples_for2(symbol, indicators, xcols_not=['open', 'high', 'low', 'close', 'datetime'])
    X = torch.from_numpy(X)
    y = torch.from_numpy(y)
    train_X, train_y, test_X, test_y = split_samples(X, y, 0.83)
    
-   model = TorchRandomForestClassifier(10, len(train_X))
+   from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier, ExtraTreesClassifier
+   from sklearn.tree import DecisionTreeClassifier, ExtraTreeClassifier
+   from sklearn.neural_network import MLPClassifier
    
-   print(f'Fitting model on {len(train_X)} samples...')
-   model.fit(train_X, train_y)
+   models = [
+      DecisionTreeClassifier(criterion='gini'),
+      DecisionTreeClassifier(criterion='entropy'),
+      DecisionTreeClassifier(criterion='log_loss'),
+      RandomForestClassifier(n_estimators=100, criterion='entropy', n_jobs=-1),
+      RandomForestClassifier(n_estimators=100, criterion='gini', n_jobs=-1),
+      RandomForestClassifier(n_estimators=100, criterion='log_loss', n_jobs=-1),
+      HistGradientBoostingClassifier(),
+      ExtraTreeClassifier(criterion='entropy', splitter='best'),
+      ExtraTreesClassifier(n_estimators=200, criterion='entropy', n_jobs=-1),
+      
+      MLPClassifier(hidden_layer_sizes=(120, 70, 32), learning_rate='adaptive'),
+   ]
    
-   y_pred = tensor([model.predict(X[i]) for i in range(len(X))])
-   # print(y_pred)
+   for model in models:
+      print(f'Fitting {typename(model)} on {len(train_X)} samples...')
+      # print(train_X.shape, train_y.shape)
+      model.fit(train_X, train_y)
+      
+      y_pred = model.predict(test_X)
+      
+      acc = 100.0 * accuracy_score(
+         test_y.numpy(),
+         y_pred
+      )
+      
+      print(f'{typename(model)} Accuracy: {acc:.2f}%')
+      
+if __name__ == '__main__':      
+   pspace = [
+      ('zscore', dict(length=[14])),
+      ('rsi', dict(length=[3, 7])),
+      # ('rsi', dict(length=7)),
+      # ('bbands', dict(length=7, std=0.82, mamode='wma')),
+      ('bbands', dict(length=[7, 14, 20], std=1.25, mamode=['ema', 'wma'])),
+      ('accbands', dict(length=[7, 14], mamode=['sma', 'ema']))
+   ]
+   pspace = flatten_dict(dict(pspace))
+   print(pspace)
+   configs = list(map(implode, expandps(pspace)))
+   print(configs)
    
-   acc = 100.0 * accuracy_score(
-      y.numpy(),
-      y_pred.detach().numpy()
-   )
-   
-   print(f'Accuracy: {acc:.2f}%')
+   for cfg in configs:
+      test_indicator_config('AMZN', cfg.items())
