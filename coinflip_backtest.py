@@ -20,6 +20,7 @@ from sklearn.preprocessing import MinMaxScaler
 from typing import *
 
 def load_dataframe(symbol:str, dir='./', format='csv', **read_kwargs):
+   dir = './stonks'
    readfn = getattr(pd, f'read_{format}')
    datapath = P.join(dir, f'{symbol}.{format}')
    if not P.exists(datapath):

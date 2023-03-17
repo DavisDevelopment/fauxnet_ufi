@@ -1,3 +1,4 @@
+from functools import wraps
 from termcolor import colored
 import torch
 from torch import nn, zeros
@@ -216,7 +217,7 @@ def samples_for(symbol:str, seq_len:int, columns:List[str]):
    
    return x, y
 
-class Encoder(nn.Module):
+class AEBase(nn.Module):
    def __init__(self, n_features:int, seq_len:int, hidden_size=800, n_recurrent_layers=1, **kwargs):
       super().__init__()
       
@@ -224,73 +225,102 @@ class Encoder(nn.Module):
       self.seq_len = seq_len
       self.n_features = n_features
       self.hidden_size = hidden_size
-      self.bidirectional = False
-      self.dropout = 0.07
+      self.bidirectional = True
+      self.dropout = 0.0
       
       self.n_directions = 2 if self.bidirectional else 1
+      self.bias = False
+      self.activation = nn.ReLU()
+
+class Encoder(AEBase):
+   @wraps(AEBase.__init__)
+   def __init__(self, *args, **kwargs):
+      super().__init__(*args, **kwargs)
       # self._init_roll_state = h0
       
-      self.roll = nn.GRU(
-         input_size=n_features,
-         hidden_size=seq_len,
+      rnn_kwargs = getsmatching(kwargs, '(recurrent|rnn|lstm|gru)_(.+)$', regexp=True) if ('rnn_opts' not in kwargs) else kwargs.pop('rnn_opts')
+      rnn_type = kwargs.pop('rnn_type', 'gru')
+      if isinstance(rnn_type, str) and rnn_type.upper() in ('GRU', 'LSTM'):
+         rnn_type = getattr(nn, rnn_type.upper())
+      elif callable(rnn_type):
+         pass
+      
+      assert callable(rnn_type), 'Invalid rnn_type argument'
+      
+      default_rnn_kwargs = dict(
+         input_size=self.n_features,
+         hidden_size=self.n_features,
          num_layers=self.n_recurrent_layers, 
-         # proj_size=seq_len, 
-         batch_first=True,
-         bidirectional=self.bidirectional,
          dropout=self.dropout,
+         bidirectional=self.bidirectional,
+         batch_first=True,
          bias=False
       )
       
-   def forward(self, x:Tensor):
-      batch_size = x.shape[0]
-      h0 = torch.ones((self.n_recurrent_layers * self.n_directions, batch_size, self.seq_len), requires_grad=True)
+      self.roll = rnn_type(**merge(default_rnn_kwargs, rnn_kwargs))
       
-      # h0 = self._init_roll_state
+   def forward(self, x:Tensor):
+      print(x.shape)
+      batch_size = x.shape[0]
+      seq_len, n_directions, hidden_size = self.seq_len, self.n_directions, self.n_features
+      h0 = Variable(torch.zeros((self.n_recurrent_layers * self.n_directions, batch_size, self.n_features), requires_grad=True))
+      
+      if self.bidirectional:
+         for i in range(h0.size(0)):
+            # print(h0[i])
+            if i % 2 == 0:
+               h0[i, :, :] = x[:, 0, :]
+            else:
+               h0[i, :, :] = x[:, -1, :]
+         
+      h0[:, :, :] = x[:, 0, :]
+      
+      
+      print(h0)
       rolled, h1 = self.roll(x, h0)
-      # print('rolled shape = ', tuple(rolled.shape))
-      # print('roll state shape = ', tuple(h1.shape))
+      print('rolled shape = ', tuple(rolled.shape))
+      print('roll state shape = ', tuple(h1.shape))
+      
+      print(tuple(rolled.shape), (batch_size, seq_len, n_directions, hidden_size))
+      print(rolled.view(batch_size, seq_len, n_directions, hidden_size).shape)
+      #(D ∗ num_layers, N, H[out])
+      
       return rolled, h1
    
-class Decoder(nn.Module):
+class Decoder(AEBase):
    def __init__(self, n_features:int, seq_len:int, hidden_size=800, n_recurrent_layers=1, **kwargs):
-      super().__init__()
-      
-      self.n_recurrent_layers = n_recurrent_layers
-      self.seq_len = seq_len
-      self.n_features = n_features
-      self.hidden_size = hidden_size
-      self.bidirectional = False
-      self.dropout = 0.07
+      super().__init__(n_features, seq_len, hidden_size=hidden_size, n_recurrent_layers=n_recurrent_layers, **kwargs)
       
       rnn_kwargs = getsmatching(kwargs, '(recurrent|rnn|lstm|gru)_(.+)$', regexp=True) if ('rnn_opts' not in kwargs) else kwargs.pop('rnn_opts')
       
-      n_directions = (2 if self.bidirectional else 1)
+      # n_directions = (2 if self.bidirectional else 1)
       rnn_kwargs = merge(dict(
-         input_size=seq_len * n_directions,
-         hidden_size=seq_len, 
+         input_size=n_features * self.n_directions,
+         hidden_size=n_features, 
          # proj_size=seq_len,
          num_layers=self.n_recurrent_layers, 
          batch_first=True,
          bidirectional=self.bidirectional,
          dropout=self.dropout,
-         bias=True
+         bias=False
       ), rnn_kwargs)
       
       self.unroll = nn.GRU(**rnn_kwargs)
       self.activ = nn.ReLU()
       
-      self.diffuse = ConvBlock(seq_len * n_directions, n_features, 8, 2)
+      # self.diffuse = ConvBlock(seq_len * self.n_directions, n_features, 8, 2)
       
    def forward(self, X:Tensor, encoded:Tensor, hdn_state:Tensor):
-      print('hdn_state=', tuple(hdn_state.shape))
+      # print('hdn_state=', tuple(hdn_state.shape))
       # print('encoded=', tuple(encoded.shape))
               
       unrolled_raw, hdn_new = self.unroll(encoded, hdn_state)
       unrolled_raw = self.activ(unrolled_raw)
-      print('unrolled shape = ', tuple(unrolled_raw.shape))
-      unrolled_raw = unrolled_raw.swapaxes(1, 2)
-      output = self.diffuse(unrolled_raw)
-      output = output.swapaxes(1, 2)
+      # print('unrolled shape = ', tuple(unrolled_raw.shape))
+      # unrolled_raw = unrolled_raw.swapaxes(1, 2)
+      # output = self.diffuse(unrolled_raw)
+      # output = output.swapaxes(1, 2)
+      output = unrolled_raw
          
       return output
       # if self.bidirectional:

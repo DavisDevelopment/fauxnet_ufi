@@ -12,7 +12,8 @@ from sklearn.preprocessing import MinMaxScaler
 
 import pickle
 from typing import *
-from tools import unzip, gets
+from tools import ternary, unzip, gets
+from tools import nn as notnone
 
 from nn.data.agg import *
 from cytoolz import *
@@ -132,11 +133,11 @@ class DataFrameSampler:
       data = scaler.transform(data)
       return data
       
-   def samples(self):
+   def samples(self, retx=True, rety=True):
       preprocess = self._preprocessing_func = compose_left(*self.preprocessing_funcs)
       df = self.df.copy()
-      assert 'volume' in df.columns
       df:DataFrame = preprocess(df)
+      
       self._df = df
       
       data:ndarray = df.to_numpy()
@@ -151,6 +152,8 @@ class DataFrameSampler:
       
       for i in range(1+in_seq_len, len(data)-out_seq_len-1):
          tstamp = df.index[i]
+         y_lbl:int = -1
+         X = None
          
          #* enforce date-range constraints
          if min_ts is not None and tstamp < min_ts:
@@ -159,27 +162,33 @@ class DataFrameSampler:
          elif max_ts is not None and tstamp > max_ts:
             continue
          
-         X = data[i-in_seq_len:i]
-         X = scaler.transform(X)
-         X = from_numpy(X)
-         X = X.unsqueeze(0).float().swapaxes(1, 2)
+         if retx:
+            X = data[i-in_seq_len:i]
+            X = scaler.transform(X)
+            X = from_numpy(X)
+            X = X.unsqueeze(0).float().swapaxes(1, 2)
+            
+            assert X.shape[2] == in_seq_len
          
-         assert X.shape[2] == in_seq_len
+         if rety:
+            y_cur = data[i, track_column]
+            y_next = data[i+1, track_column]
+            y_delta = y_next - y_cur
+            y_pct = y_delta / y_cur * 100.0
+            
+            if y_pct > 0.0:
+               y_lbl = 1
+            elif y_pct < 0.0:
+               y_lbl = 0
          
-         y_cur = data[i, track_column]
-         y_next = data[i+1, track_column]
-         y_delta = y_next - y_cur
-         y_pct = y_delta / y_cur * 100.0
+         _undefined = object()
+         r = tuple(v for v in [
+            tstamp,
+            ternary(retx, X, _undefined),
+            ternary(rety, y_lbl, _undefined)
+         ] if v is not _undefined)
          
-         y_lbl = -1
-         if y_pct > 0.0:
-            y_lbl = 1
-         elif y_pct < 0.0:
-            y_lbl = 0
-         
-         #TODO return the classification for `y_pct` instead of returning `y_pct`
-         
-         yield tstamp, X, y_lbl
+         yield r
          
       def pack(self):
          times = []

@@ -257,6 +257,9 @@ def nn(x): return x is not None
 def nor(a, b):
    return a if a is not None else b
 
+def ternary(cond:bool, tval, fval):
+   return tval if cond else fval
+
 def fnor(a, b, reject=None):
    if reject is None:
       reject = lambda x: False

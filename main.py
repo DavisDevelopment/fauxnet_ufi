@@ -35,6 +35,7 @@ from sklearn.preprocessing import MinMaxScaler
 from ttools.thunk import Thunk, thunkv, thunk
 
 def list_stonks(stonk_dir='./stonks', shuffle=True)->List[str]:
+   stonk_dir = './stonks'
    from pathlib import Path
    from random import shuffle
    
@@ -44,6 +45,7 @@ def list_stonks(stonk_dir='./stonks', shuffle=True)->List[str]:
    return tickers
 
 def load_frame(sym:str, dir='./stonks')->DataFrame:
+   dir = './stonks'
    #* read the DataFrame from the filesystem
    df:DataFrame = pd.read_feather(P.join(dir, '%s.feather' % sym))
    
@@ -628,7 +630,7 @@ def generate_ensemble_components(n_winners=25, n_symbols=25, filter_symols=None,
          tbeg = time()
          symbols, winner, elogs = ensemble_stage2(
             symbols=symbols,
-            epochs=100,#rand.randint(2, 6),
+            epochs=20,#rand.randint(2, 6),
             n_eval_symbols=50
          )
          tend = time()
