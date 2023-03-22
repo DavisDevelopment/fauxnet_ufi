@@ -1,4 +1,6 @@
-from itertools import groupby
+from array import array
+from itertools import groupby, product
+from functools import partial, cached_property
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
@@ -8,11 +10,18 @@ from typing import *
 
 from cytoolz import *
 from cytoolz.dicttoolz import merge, valmap, keymap, keyfilter, valfilter
+from cytoolz.functoolz import compose_left, juxt
+import cytoolz.functoolz as cft
 from fn import F, _
 
 from inspect import signature, isfunction, Signature
+
+from torch import typename
 from datatools import renormalize, rescale
 from tools import closure, dotget, dotgets, before, after, gets, isiterable, once
+from cachetools import cached, cachedmethod
+from random import shuffle
+
 
 def dfget(df:DataFrame, proto:Union[str, Callable[[DataFrame], Series], Callable[[DataFrame], DataFrame]])->Union[Series, DataFrame]:
    if isinstance(proto, str):
@@ -51,8 +60,8 @@ class Node:
       
    def __str__(self):
       r = self.name + '('
-      from inspect import Signature
-      print(Signature(self.config))
+      # from inspect import Signature
+      # print(Signature(self.config))
       r += ')'
       return r
       
@@ -131,7 +140,7 @@ class ApplyNodes:
       r = df.copy()
       for i, fn in enumerate(self.nodes):
          node = fn.node
-         print('node.name = ', node.name)
+         # print('node.name = ', node.name)
          nkw = kwargs.pop(node.name, {})
          
          try:
@@ -334,10 +343,12 @@ def make_indicator_nodes()->Dict[str, Union[Node, Dict[str, Node]]]:
 indicator_nodes = make_indicator_nodes()
 
 import features.ta.volatility as fta
-indicator_nodes['bbands'] = indicator_nodes['volatility.bbands'] = mkNode('bbands', fta.bbands)
-# indicator_nodes['volatility.donchian'] = mkNode('volatility.donchian', fta.donchian)
 
-from copy import deepcopy
+indicator_nodes['bbands'] = indicator_nodes['volatility.bbands'] = mkNode('bbands', fta.bbands)
+indicator_nodes['donchian'] = indicator_nodes['volatility.donchian'] = mkNode('donchian', fta.donchian)
+
+from copy import deepcopy, copy
+
 from fn import F, _
 
 lrange = lambda *args: np.arange(*args).tolist()
@@ -347,21 +358,78 @@ def implode(d:MutableMapping):
    from ttools.unflatten import unflatten
    return unflatten(d)
 
-def expandps(d:Union[Dict[str, Any], Iterable[Tuple[str, Any]]]):
+class Symbol:
+   _G:Dict[str, int] = {}
+   
+   name:str
+   uid:int
+   
+   def __init__(self, id:Any=''):
+      self.name = str(id)
+      Symbol._G.setdefault(self.name, 0)
+      Symbol._G[self.name] += 1
+      self.uid = Symbol._G[self.name]
+      self._s = f"Symbol({id})"
+      
+   def __str__(self):
+      return f'{self.name}{self.uid}'
+      
+   def __repr__(self):
+      return self._s
+   
+def get_items(d):
+   if isinstance(d, Mapping):
+      yield from d.items()
+   elif isiterable(d):
+      it = iter(d)
+      for x in it:
+         if isinstance(x, tuple):
+            yield x
+            break
+         else:
+            print(x)
+            raise TypeError(typename(x))
+      yield from it
+   else:
+      graceful = False
+      if graceful:
+         yield (None, d)
+      else:
+         raise TypeError(typename(d))
+   
+def expandps(items):
+   tems = []
+   
+   items = get_items(items)
+   for x in items:
+      if len(x) == 2:
+         ref, opts = x
+         if isinstance(ref, str):
+            sym = Symbol(ref)
+         elif isinstance(ref, Symbol):
+            sym, ref = ref, ref.name
+         tems.append((sym, ref, opts))
+      else:
+         if isinstance(x, tuple) and len(x) != 2:
+            raise Exception(f'Unexpected {len(x)}-tuple {repr(x)}')
+         else:
+            raise Exception(f'Unexpected {typename(x)} {repr(x)}')
+         
+   
+   
+
+def _expandps(d:Union[Dict[str, Any], Iterable[Tuple[str, Any]]]):
    from itertools import product
    if not isinstance(d, dict):
       if isiterable(d):
          items = list(d)
-         for k, subspace in items:
-            if isinstance(subspace, dict):
-               print(expandps(subspace))
       else:
          return d
    else:
       items = list(d.items())
+      # items = [(Symbol(k), v) for k, v in d.items() if '.' not in k]
    
    keys = [k for k,_ in items]
-   print(items)
    combos = list(product(*((v if isiterable(v) else [v]) for k, v in items)))
    
    # combos = []
@@ -402,7 +470,13 @@ def mkAnalyzer(items):
       items = [(a, b) for a, b in items]
    
    nodes = []
-   for iid, cfg in items:
+   for item in items:
+      if len(item) == 2:
+         iid, cfg = item
+      
+      elif len(item) == 3:
+         iid, _, cfg = item
+      
       assert iid in indicator_nodes, f'No Indicator named "{iid}"'
       node = indicator_nodes[iid]
       if isinstance(node, Node):

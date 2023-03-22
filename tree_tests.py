@@ -1,4 +1,6 @@
+from functools import partial
 from math import floor
+from pprint import pprint
 import numpy as np
 # from numpy import typename
 import torch
@@ -16,7 +18,10 @@ from fn import F, _
 from cytoolz import *
 
 from pandas import DataFrame, Series
-from tools import flatten_dict, unzip
+from tools import flatten_dict, unzip, maxby
+
+import gc
+from tqdm import tqdm
 
 def samples_for(symbol:str, seq_len:int, columns:List[str]):
    df:DataFrame = load_frame(symbol, './sp100')
@@ -45,8 +50,13 @@ def samples_for(symbol:str, seq_len:int, columns:List[str]):
    y = data[:, datacols.index(y_columns[0])]
    return x, y
 
-def samples_for2(symbol:str, analyze:Callable[[DataFrame], DataFrame], xcols=None, xcols_not=[], ycol='SIG'):
-   df:DataFrame = load_frame(symbol)
+def samples_for2(symbol:Union[str, DataFrame], analyze:Callable[[DataFrame], DataFrame], xcols=None, xcols_not=[], ycol='SIG', x_timesteps=1):
+   if isinstance(symbol, str):
+      df:DataFrame = load_frame(symbol)
+   elif isinstance(symbol, DataFrame):
+      df:DataFrame = symbol
+   else:
+      raise ValueError('baw')
    df['tmrw_close'] = df['close'].shift(-1)
    df['SIG'] = (df['tmrw_close'] > df['close']).astype('int')
    
@@ -61,9 +71,19 @@ def samples_for2(symbol:str, analyze:Callable[[DataFrame], DataFrame], xcols=Non
    xcols = [cols.index(c) for c in xcols]
    ycol = cols.index(ycol)
    data:np.ndarray = df.to_numpy()
-   print(data)
+   # print(data)
    
-   X = data[:, xcols]
+   #TODO scaling the data
+   
+   if x_timesteps == 1:
+      X = data[:, xcols]
+   else:
+      #TODO breaking the data up into episodes of {x_timesteps} length
+      n_episodes = len(data) - x_timesteps
+      X = np.zeros((n_episodes, x_timesteps, len(xcols)))
+      for i in range(n_episodes):
+         # print(slice(i, i+x_timesteps-1))
+         X[i, :, :] = data[i:i+x_timesteps, xcols]
    y = data[:, ycol]
    
    return X, y
@@ -86,15 +106,26 @@ def split_samples(X, y, pct=0.2, shuffle=True):
    
    return train_X, train_y, test_X, test_y
 
-from ta_experiments import mkAnalyzer, expandps, implode
+def scale_dataframe(df:DataFrame, nq=500):
+   from sklearn.preprocessing import QuantileTransformer
+   scaler = QuantileTransformer(n_quantiles=nq)
+   r = df.copy()
+   # print(df)
+   sX = scaler.fit_transform(X=df).T
+   for i, c in enumerate(r.columns.tolist()):
+      r[c] = sX[i]
+   return r
+
+# from ta_experiments import PGrid, Symbol, mkAnalyzer, expandps, implode, lrange
 # if __name__ == '__main__':
-def test_indicator_config(symbol:str, items):
+def test_indicator_config(symbol, indicators, config={}):
    from sklearn.metrics import accuracy_score
    
-   indicators = mkAnalyzer(items)
+   # indicators = mkAnalyzer(items)
+   indicators = F(indicators.apply)
    
-   df = load_frame(symbol)
-   print(indicators(df))
+   # df = load_frame(symbol)
+   # print(indicators(df))
    X, y = samples_for2(symbol, indicators, xcols_not=['open', 'high', 'low', 'close', 'datetime'])
    X = torch.from_numpy(X)
    y = torch.from_numpy(y)
@@ -103,6 +134,7 @@ def test_indicator_config(symbol:str, items):
    from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier, ExtraTreesClassifier
    from sklearn.tree import DecisionTreeClassifier, ExtraTreeClassifier
    from sklearn.neural_network import MLPClassifier
+   # from tsai.models import MINIROCKET
    
    models = [
       DecisionTreeClassifier(criterion='gini'),
@@ -118,8 +150,9 @@ def test_indicator_config(symbol:str, items):
       MLPClassifier(hidden_layer_sizes=(120, 70, 32), learning_rate='adaptive'),
    ]
    
+   results = []
    for model in models:
-      print(f'Fitting {typename(model)} on {len(train_X)} samples...')
+      # print(f'Fitting {typename(model)} on {len(train_X)} samples...')
       # print(train_X.shape, train_y.shape)
       model.fit(train_X, train_y)
       
@@ -130,21 +163,128 @@ def test_indicator_config(symbol:str, items):
          y_pred
       )
       
-      print(f'{typename(model)} Accuracy: {acc:.2f}%')
+      results.append(dict(
+         model_type=type(model),
+         model_args=model.get_params(),
+         indicators=indicators,
+         accuracy=acc
+      ))
+      # print(f'{typename(model)} Accuracy: {acc:.2f}%')
       
-if __name__ == '__main__':      
-   pspace = [
-      ('zscore', dict(length=[14])),
-      ('rsi', dict(length=[3, 7])),
-      # ('rsi', dict(length=7)),
-      # ('bbands', dict(length=7, std=0.82, mamode='wma')),
-      ('bbands', dict(length=[7, 14, 20], std=1.25, mamode=['ema', 'wma'])),
-      ('accbands', dict(length=[7, 14], mamode=['sma', 'ema']))
-   ]
-   pspace = flatten_dict(dict(pspace))
-   print(pspace)
-   configs = list(map(implode, expandps(pspace)))
-   print(configs)
+   results = DataFrame.from_records(results)
+   results = results.sort_values('accuracy', ascending=False, ignore_index=True)
+   results = results[['accuracy', 'model_args', 'model_type', 'indicators']]
+   print(results)
    
-   for cfg in configs:
+   return results.iloc[0]
+
+def test_minirocket(data=None):
+   from tsai.models.MINIROCKET import MiniRocketClassifier, MiniRocketVotingClassifier
+   from tsai.basics import get_UCR_data, timer
+   
+   if data is None:
+      # Univariate classification with sklearn-type API
+      dsid = 'OliveOil'
+      X_train, y_train, X_valid, y_valid = get_UCR_data(dsid)   # Download the UCR dataset
+   
+   else:
+      X_train, y_train, X_valid, y_valid = data
+   
+   # print(X_train.shape)
+   # print(y_train)
+   
+   # Computes MiniRocket features using the original (non-PyTorch) MiniRocket code.
+   # It then sends them to a sklearn's RidgeClassifier (linear classifier).
+   model = MiniRocketClassifier()
+   timer.start(False)
+   model.fit(X_train, y_train)
+   t = timer.stop()
+   
+   acc = model.score(X_valid, y_valid)
+   print(f'valid accuracy    : {acc:.3%} time: {t}')
+   del model
+   
+   return dict(
+      accuracy=acc,
+      # model=model
+   )
+      
+if __name__ == '__main__':
+   # test_minirocket()
+   # exit()
+    
+   from faux.pgrid import PGrid
+   from features.ta.loadout import Indicators, IndicatorBag
+   
+   hpg = PGrid(dict(
+      seq_len=[1, 3, 7, 14]
+   ))
+   
+   ib = IndicatorBag()
+   ib.add('rsi', length=[3, 5, 7])
+   ib.add('zscore', length=[3, 5, 7])
+   ib.add('bbands', length=[3, 5, 7])
+   ib.add('mom', length=[3, 5, 7])
+   
+   idll = list(map(lambda d: Indicators(*d.items()), ib.expand()))
+   hpdl = list(hpg.expand())
+   bests = []
+
+   from time import sleep, time
+   from olbi import printing, configurePrinting
+   
+   pbar = tqdm(total=len(idll) * len(hpdl))
+   for data_transform in idll:
+      for hyperparams in hpdl:
+         with printing(False):
+            pbar.update()
+            X, y = samples_for2('AMZN', F(data_transform.apply), xcols_not=['open', 'high', 'low', 'close', 'datetime'], x_timesteps=hyperparams['seq_len'])
+            X = torch.from_numpy(X)
+            y = torch.from_numpy(y)
+            
+            train_X, train_y, test_X, test_y = split_samples(X, y, 0.83)
+            train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v) for v in (train_X, test_X))
+            data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
+         
+         best = test_minirocket(data=data)
+         best['preprocessor'] = data_transform
+         print(best)
+         
+         sleep(5.0)
+
+         bests.append(best)
+         gc.collect()
+   
+   explogs = DataFrame.from_records(bests)
+   alltimebest = maxby(bests, _['accuracy'])
+   print(alltimebest)
+   print(explogs.sort_values('accuracy', ascending=False))
+   
+   exit()
+   
+   
+   symkey = lambda item: (Symbol(id=item[0]), expandps(item[1]))
+   pspace = list(map(symkey, [
+      ('zscore', dict(length=[2, 14])),
+      ('zscore', dict(length=[2, 14])),
+      # ('rsi', dict(length=[3, 7])),
+      # ('bbands', dict(length=lrange(3, 7, 1), std=[0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0], mamode=['wma'])),
+      # ('accbands', dict(length=[3, 7, 14], mamode=['wma'])),
+      # ('bop', dict()),
+      # ('intertia', dict()),
+      # ('mom', dict(length=[3, 5, 7, 9], offset=[0, 1, 2])),
+   ]))
+   
+   def wimplode(d):
+      top = {(k.name if isinstance(k, Symbol) else str(k)):implode(v) for k, v in d.items()}
+      return top
+   
+   configs = list(map(wimplode, expandps(pspace)))
+   pprint(configs)
+   print(len(configs), ' possible configurations')
+   input()
+   
+   from tqdm import tqdm
+   
+   for cfg in tqdm(configs):
       test_indicator_config('AMZN', cfg.items())
