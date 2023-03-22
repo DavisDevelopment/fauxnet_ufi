@@ -24,13 +24,14 @@ def globcol(df, pattern:str='*'):
    else:
       return tuple(df[c] for c in matched)
 
-def iwrap(ifn):
+def iwrap(ifn, fwrap=True):
    def owrapped(wfn):
-      @wraps(ifn)
+      # @wraps(ifn)
       def wrapper(*args, **kwargs):
          return wfn(ifn, *args, **kwargs)
-      wrapper.__doc__ = ifn.__doc__
-      # wrapper.__ann
+      if fwrap:
+         wrapper = wraps(ifn)(wrapper)
+         wrapper.__doc__ = ifn.__doc__
       return wrapper
    return owrapped
 
@@ -60,3 +61,10 @@ def accbands(_super, high, low, close, **kwargs):
 def atr(_super, high, low, close, percent=True, **kwargs):
    return _super(high, low, close, percent=percent, **kwargs)
 
+@iwrap(ta.vwap)
+def delta_vwap(_super, high, low, close, volume, anchor=None, offset=None):
+   abs_res:Series = _super(high, low, close, volume, anchor, offset)
+   rel_res = abs_res.pct_change()
+   rel_res.name = f'delta_{abs_res.name}'
+   
+   return rel_res

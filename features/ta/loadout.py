@@ -69,16 +69,18 @@ def ind_merge(df:DataFrame, result:Any):
       df[c] = rd[c]
    return df
 
-IRO = [
+IRO = list(reversed([
    ta,
    vta
-]
+]))
 
 @lru_cache
 def resolve_ifn(fnref):
    if isinstance(fnref, str):
-      for i in range(len(IRO)-1, 0, -1):
-         ifn = dotget(IRO[i], fnref, None)
+      for i in range(len(IRO)):
+         mod = IRO[i]
+         print(mod)
+         ifn = dotget(mod, fnref, None)
          if ifn is not None and isfunction(ifn):
             return ifn
    elif isfunction(fnref):
@@ -88,7 +90,7 @@ def resolve_ifn(fnref):
 
 @lru_cache
 def bind_indicator(name:str):
-   ifn = getattr(ta, name, None)
+   ifn = resolve_ifn(name)
    if ifn is None:
       raise ValueError(f'No indicator named {name} could be found')
    assert callable(ifn), f'{name} is not a function'

@@ -1,4 +1,4 @@
-
+from fn import F, _
 from pprint import pprint
 import sys, os
 
@@ -15,6 +15,7 @@ from nn.data.core import TwoPaneWindow
 
 from torch import Tensor, from_numpy, tensor
 from tools import Struct, unzip
+from operator import methodcaller
 
 from sklearn.preprocessing import MinMaxScaler
 from typing import *
@@ -58,7 +59,8 @@ def run_backtest(model, df:pd.DataFrame=None, samples:Iterable[Tuple[pd.Timestam
    
    def transact(kind, ts, volume, price):
       entry = (kind, ts, volume, price)
-      print(entry)
+      # nonlocal doll
+      print(entry, f'${dollars + (holdings * price):,.2f}')
       logs.append(entry)
    
    def close_long(t):
@@ -127,6 +129,12 @@ def run_backtest(model, df:pd.DataFrame=None, samples:Iterable[Tuple[pd.Timestam
    wrong = 0
    right = 0
    
+   bts, bX, by = tuple(map(F(list), unzip(backtest_on)))
+   # bX, by = tuple(map(F(methodcaller('numpy')) >> np.asanyarray, (bX, by)))
+   numpify = lambda xxx: np.asanyarray(list(map(lambda v: (v.numpy() if isinstance(v, Tensor) else v), xxx)), dtype='float64')
+   bX, by = numpify(bX), numpify(by)
+   print(bX)
+   
    for time, X, y in backtest_on:
       ypred = model(X).detach().long()[0].item()
       # print(y.item(), ypred)
@@ -179,7 +187,7 @@ def run_backtest(model, df:pd.DataFrame=None, samples:Iterable[Tuple[pd.Timestam
 
 # if __name__ == '__main__':
 # def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None):
-def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None, samples=[]):
+def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None, samples=[], **kwargs):
    ticker:str = 'AAPL'
    
    if isinstance(stock, str):
@@ -196,7 +204,7 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
       # print(model)
    
    bal_init = stock.close.iloc[0]
-   logs, balances = run_backtest(model, stock, init_balance=bal_init, pos_type=pos_type, samples=samples)
+   logs, balances = run_backtest(model, stock, init_balance=bal_init, pos_type=pos_type, samples=samples, **kwargs)
    
    blogs = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
    blogs = blogs.set_index('datetime', drop=True)

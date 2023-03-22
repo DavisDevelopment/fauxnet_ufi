@@ -143,6 +143,7 @@ def split_samples(X=None, y=None, index=None, pct=0.2, shuffle=True)->Union[TupI
    
    test_X, test_y = X[-spliti:], y[-spliti:]
    train_X, train_y = X[:-spliti], y[:-spliti]
+   print(len(train_X), len(test_X))
 
    split_vals = (
       *ensure_eq_sized(train_X, train_y), 
@@ -294,20 +295,24 @@ if __name__ == '__main__':
       
       #TODO: introduce a function to generate all combinations of N indicators
       ib = IndicatorBag()
-      # ib.add('vwap', length=[10])
       
       ib.add('rsi', length=[2, 3])
       ib.add('zscore', length=[2, 3])
       
       ib.add('bbands', length=[10], mamode=['vwma', 'wma'], std=[1.25])
-      # ib.add('accbands', length=[10])
+      # ib.add('donchian', length=[10])
+      ib.add('accbands', length=[10])
       
+      ib.add('delta_vwap')
+      ib.add('vwap')
       ib.add('bop')
       ib.add('mom')
       ib.add('inertia')
+      ib.add('atr')
       #TODO add more T/A options
       
-      ibcl = ls([x for x in ib.sampling()], True)
+      ibcl = ls([x for x in ib.sampling(2)], True)
+      # ibcl = ls(ib.expand(), True)
       print(ibcl)
       
       # TODO: convert the `expand` methods to generator functions, so that there aren't as many local functions allocated 
@@ -329,7 +334,9 @@ if __name__ == '__main__':
             ts_idx, X, y = samples_for2(train_symbol, F(data_transform.apply), xcols_not=['open', 'high', 'low', 'close', 'datetime'], x_timesteps=hyperparams['seq_len'])
             X = torch.from_numpy(X)
             y = torch.from_numpy(y)
-            train_X, train_y, test_X, test_y = split_samples(X, y, 0.83, shuffle=False)
+            
+            #* train the model on 85% of the available data, evaluating on the remaining 15%
+            train_X, train_y, test_X, test_y = split_samples(X=X, y=y, pct=0.15, shuffle=True)
             train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
             
             data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
@@ -397,7 +404,7 @@ if __name__ == '__main__':
          #TODO run the backtest on the model
          _mdl = res['model']
 
-         print(_mdl.predict(test_X.numpy()))
+         # print(_mdl.predict(test_X.numpy()))
          # input()
          
          def wmodel(X: Tensor):
@@ -417,8 +424,9 @@ if __name__ == '__main__':
          
          totlist = lambda a: [a[i] for i in range(len(a))]
          
-         sample_triples = zip(ts_idx[-365:], totlist(test_X)[-365:], totlist(test_y)[-365:])
-         btres = backtest(symbol, wmodel, samples=sample_triples)
+         slbeg, slend = -(365 * 2), -365
+         sample_triples = zip(ts_idx[slbeg:slend], totlist(test_X)[slbeg:slend], totlist(test_y)[slbeg:slend])
+         btres = backtest(symbol, wmodel, samples=sample_triples, pos_type='both')
          print(btres)
       
       except TypeError as e:
