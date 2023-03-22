@@ -55,6 +55,11 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
    logs = []
    balances = []
    
+   def transact(kind, ts, volume, price):
+      entry = (kind, ts, volume, price)
+      print(entry)
+      logs.append(entry)
+   
    def close_long(t):
       nonlocal holdings
       vol = holdings
@@ -67,7 +72,7 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
       nonlocal dollars
       dollars += (vol * today.close)
       
-      logs.append(('S', t, vol, today.close))
+      transact('S', t, vol, today.close)
    
    def open_long(t):
       today = df.loc[t]
@@ -76,7 +81,7 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
       vol = (dollars / today.close)
       holdings = vol
       dollars -= (vol * today.close)
-      logs.append(('B', t, vol, today.close))
+      transact('B', t, vol, today.close)
       
    def open_short(t):
       today = df.loc[t]
@@ -104,41 +109,46 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
    from nn.data.sampler import DataFrameSampler
    
    sampler = DataFrameSampler(df)
+   # sampler.
    if callable(on_sampler):
       on_sampler(sampler)
    
          
    last_time = None
+   backtest_on = list(sampler.samples())
+   print(f'running backtest on {len(backtest_on)} samples')
    
-   for time, X, y in sampler.samples():
+   for time, X, y in backtest_on:
+      print(X)
       ypred:Tensor = model(X)
-      # print(type(ypred))
       if ypred.ndim != 0:
-         # quantize
-         ypred = quantize(ypred, 3)
+         ypred = quantize(ypred, 2)
+         
+      print(ypred, dollars, holdings)
+      # print(type(ypred))
+      # if ypred.ndim != 0:
+      #    # quantize
+      #    ypred = quantize(ypred, 3)
       
       if holdings > 0:
          #TODO: only close when profit is not predicted
-         close_long(time)
+         if ypred == 0:
+            close_long(time)
       
       elif holdings < 0:
-         #TODO: only close when profit is not predicted
-         close_short(time)
+         #TODO: only close when loss is not predicted
+         if ypred == 1:
+            close_short(time)
       
       balances.append((time, dollars))
       
-      
-      # print('ypred=', ypred)
-      if ypred == 0: #* Horizontal or Undefined movement
-         pass
-      
-      elif ypred == 1: #* Loss, Downward Movement 
-         if pos_type in ('long', 'both'):
-            open_long(time)
-               
-      elif ypred == 2: #* Gain, Upward Movement
+      if ypred == 0: #* Loss, Downward Movement 
          if pos_type in ('short', 'both'):
             open_short(time)
+                        
+      elif ypred == 1: #* Gain, Upward Movement
+         if pos_type in ('long', 'both'):
+            open_long(time)
       
       else:
          raise Exception('Invalid value for ypred; Invalid class label')
