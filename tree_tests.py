@@ -1,10 +1,12 @@
 from functools import partial
 from math import floor
+from random import sample
 from pprint import pprint
 import numpy as np
 # from numpy import typename
 import torch
 from torch import Tensor, tensor, typename
+from faux.pgrid import ls
 
 from main import list_stonks, load_frame, ExperimentConfig
 from nn.data.sampler import DataFrameSampler
@@ -57,6 +59,7 @@ def samples_for2(symbol:Union[str, DataFrame], analyze:Callable[[DataFrame], Dat
       df:DataFrame = symbol
    else:
       raise ValueError('baw')
+   
    df['tmrw_close'] = df['close'].shift(-1)
    df['SIG'] = (df['tmrw_close'] > df['close']).astype('int')
    
@@ -82,7 +85,6 @@ def samples_for2(symbol:Union[str, DataFrame], analyze:Callable[[DataFrame], Dat
       n_episodes = len(data) - x_timesteps
       X = np.zeros((n_episodes, x_timesteps, len(xcols)))
       for i in range(n_episodes):
-         # print(slice(i, i+x_timesteps-1))
          X[i, :, :] = data[i:i+x_timesteps, xcols]
    y = data[:, ycol]
    
@@ -202,11 +204,11 @@ def test_minirocket(data=None):
    
    acc = model.score(X_valid, y_valid)
    print(f'valid accuracy    : {acc:.3%} time: {t}')
-   del model
+   # del model
    
    return dict(
       accuracy=acc,
-      # model=model
+      model=model
    )
       
 if __name__ == '__main__':
@@ -217,48 +219,108 @@ if __name__ == '__main__':
    from features.ta.loadout import Indicators, IndicatorBag
    
    hpg = PGrid(dict(
-      seq_len=[1, 3, 7, 14]
+      seq_len=[10]
    ))
    
+   #TODO: introduce a function to generate all combinations of N indicators
    ib = IndicatorBag()
-   ib.add('rsi', length=[3, 5, 7])
-   ib.add('zscore', length=[3, 5, 7])
-   ib.add('bbands', length=[3, 5, 7])
-   ib.add('mom', length=[3, 5, 7])
+   # ib.add('vwap', length=[10])
    
-   idll = list(map(lambda d: Indicators(*d.items()), ib.expand()))
+   ib.add('rsi', length=[2, 3])
+   ib.add('zscore', length=[2, 3])
+   
+   ib.add('bbands', length=[10], mamode=['vwma', 'wma'], std=[1.25])
+   # ib.add('accbands', length=[10])
+   
+   ib.add('bop')
+   ib.add('mom')
+   ib.add('inertia')
+   #TODO add more T/A options
+   
+   ibcl = ls([x for x in ib.sampling()], True)
+   print(ibcl)
+   
+   # TODO: convert the `expand` methods to generator functions, so that there aren't as many local functions allocated 
+   # TODO ...as there are combinations of indicator options
+   # ibcl = ib.expand()
+   idll = map(lambda d: Indicators(*d.items()), ibcl)
+   # 
    hpdl = list(hpg.expand())
    bests = []
 
    from time import sleep, time
    from olbi import printing, configurePrinting
    
-   pbar = tqdm(total=len(idll) * len(hpdl))
+   train_symbol = 'AMZN'
+   pbar = tqdm(total=len(ibcl) * len(hpdl))
    for data_transform in idll:
       for hyperparams in hpdl:
-         with printing(False):
-            pbar.update()
-            X, y = samples_for2('AMZN', F(data_transform.apply), xcols_not=['open', 'high', 'low', 'close', 'datetime'], x_timesteps=hyperparams['seq_len'])
-            X = torch.from_numpy(X)
-            y = torch.from_numpy(y)
-            
-            train_X, train_y, test_X, test_y = split_samples(X, y, 0.83)
-            train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v) for v in (train_X, test_X))
-            data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
+         pbar.update()
+         X, y = samples_for2(train_symbol, F(data_transform.apply), xcols_not=['open', 'high', 'low', 'close', 'datetime'], x_timesteps=hyperparams['seq_len'])
+         X = torch.from_numpy(X)
+         y = torch.from_numpy(y)
+         train_X, train_y, test_X, test_y = split_samples(X, y, 0.83)
+         train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
+         
+         data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
          
          best = test_minirocket(data=data)
-         best['preprocessor'] = data_transform
-         print(best)
+         best['indicators'] = data_transform.items()
+         best['hyperparams'] = hyperparams
+         del best['model']
          
-         sleep(5.0)
-
+         pprint(best)
+         
          bests.append(best)
          gc.collect()
    
    explogs = DataFrame.from_records(bests)
    alltimebest = maxby(bests, _['accuracy'])
    print(alltimebest)
-   print(explogs.sort_values('accuracy', ascending=False))
+   explogs:DataFrame = explogs.sort_values('accuracy', ascending=False)
+   explogs.to_pickle('minirocket_exp_results.pickle')
+   # explogs['indicators'] = explogs['indicators'].apply(lambda i: dict(i.items()))
+   print(explogs)
+   #TODO now, take the best configuration and fit MINIROCKET on an aggregate dataset
+   #TODO ...then, evaluate that on a comprehensive list of symbols, and document performance statistics
+   #TODO ...on each symbol individually and en aggregate
+
+   winner = explogs.iloc[0]
+   winning_analyzer = Indicators(*winner.indicators)
+   winning_params   = winner.hyperparams
+   
+   eval_symbols =  sample(list_stonks(), 50)
+   
+   tests = []
+   for symbol in eval_symbols:
+      X, y = samples_for2(
+         symbol=symbol, 
+         analyze=F(winning_analyzer.apply), 
+         xcols_not=['open', 'high', 'low', 'close', 'datetime'], 
+         x_timesteps=winning_params['seq_len']
+      )
+      
+      X = torch.from_numpy(X)
+      y = torch.from_numpy(y)
+      
+      train_X, train_y, test_X, test_y = split_samples(X, y, 0.83)
+      train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
+      
+      data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
+      
+      res:Dict[str, Any] = test_minirocket(data=data)
+      res['symbol'] = symbol
+      # best['indicators'] = winning_analyzer.items()
+      # best['hyperparams'] = winning_params
+      # del best['model']
+      
+      # pprint(best)
+      
+      tests.append(res)
+   
+   tests = DataFrame.from_records(tests).sort_values('accuracy', ascending=False)['symbol', 'accuracy', 'model']
+   print(tests)
+   tests.to_pickle('minirocket_results.pickle')
    
    exit()
    

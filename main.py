@@ -44,6 +44,9 @@ def list_stonks(stonk_dir='./stonks', shuffle=True)->List[str]:
    
    return tickers
 
+from cachetools import cached, Cache, keys
+
+@cached(cache=Cache(25))
 def load_frame(sym:str, dir='./stonks')->DataFrame:
    dir = './stonks'
    #* read the DataFrame from the filesystem

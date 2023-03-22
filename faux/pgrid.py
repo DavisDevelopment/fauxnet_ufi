@@ -12,7 +12,7 @@ from typing import *
 class PDef:
    def __init__(self, name=None, value_space:Any=None, constraints=None):
       self.name = name
-      self.value_space = value_space
+      self.value_space = value_space if isiterable(value_space) else [value_space]
       self.eliminated_values = []
       self.constraints = None
       if constraints is not None:
@@ -67,7 +67,9 @@ class PGrid:
       # names = [p.name for p in self.params]
       for p in self.params:
          k.append(p.name)
-         g.append(ls(p.expand(), shuffled=shuffled))
+         a = list(p.expand())
+         # print(a)
+         g.append(ls(a, shuffled=shuffled))
       
       all_poss = ls(product(*g), shuffled=shuffled)
       all_poss = list(map(lambda x: dict(zip(k, x)), all_poss))
