@@ -45,7 +45,8 @@ def count_classes(y: ndarray):
 
 pos_types = ('long', 'short', 'both')
 
-def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='long', on_sampler=None):
+# def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='long', on_sampler=None):
+def run_backtest(model, df:pd.DataFrame=None, samples:Iterable[Tuple[pd.Timestamp, Tensor, Tensor]]=[], init_balance:float=100.0, pos_type='long', on_sampler=None):
    steps = []
    dollars = init_balance
    dollars_init = dollars
@@ -77,10 +78,14 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
    def open_long(t):
       today = df.loc[t]
       nonlocal holdings, dollars
-      
+      if holdings > 0:
+         #! really, this shouldn't be happening at all
+         pass
       vol = (dollars / today.close)
-      holdings = vol
+      # print(f'vol = ({dollars} / {today.close})')
+      holdings += vol
       dollars -= (vol * today.close)
+      
       transact('B', t, vol, today.close)
       
    def open_short(t):
@@ -104,31 +109,31 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
       borrow_price = None
       holdings = 0
       
+   samples = list(samples)
+   
+   if len(samples) == 0:
+      from nn.data.sampler import DataFrameSampler
       
-   # from nn.data.agg import *
-   from nn.data.sampler import DataFrameSampler
-   
-   sampler = DataFrameSampler(df)
-   # sampler.
-   if callable(on_sampler):
-      on_sampler(sampler)
-   
+      sampler = DataFrameSampler(df)
+      if callable(on_sampler):
+         on_sampler(sampler)
+      samples = list(sampler.samples())
+   else:
+      pass   
          
    last_time = None
-   backtest_on = list(sampler.samples())
+   backtest_on = samples[:]
    print(f'running backtest on {len(backtest_on)} samples')
+   wrong = 0
+   right = 0
    
    for time, X, y in backtest_on:
-      print(X)
-      ypred:Tensor = model(X)
-      if ypred.ndim != 0:
-         ypred = quantize(ypred, 2)
-         
-      print(ypred, dollars, holdings)
-      # print(type(ypred))
-      # if ypred.ndim != 0:
-      #    # quantize
-      #    ypred = quantize(ypred, 3)
+      ypred = model(X).detach().long()[0].item()
+      # print(y.item(), ypred)
+      if y.item() == ypred:
+         right += 1
+      else:
+         wrong += 1
       
       if holdings > 0:
          #TODO: only close when profit is not predicted
@@ -147,7 +152,7 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
             open_short(time)
                         
       elif ypred == 1: #* Gain, Upward Movement
-         if pos_type in ('long', 'both'):
+         if pos_type in ('long', 'both') and holdings == 0:
             open_long(time)
       
       else:
@@ -165,12 +170,16 @@ def run_backtest(model, df:pd.DataFrame, init_balance:float=100.0, pos_type='lon
    
    return_on_investment = ((dollars / dollars_init) * 100)
    
-   print(f'roi = {return_on_investment:,.2f}%')
+   print('\n'.join([
+      f'roi = {return_on_investment:,.2f}%',
+      f'acc = {right / (right + wrong) * 100:,.2f}%'
+   ]))
    
    return logs, balances
 
 # if __name__ == '__main__':
-def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None):
+# def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None):
+def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None, samples=[]):
    ticker:str = 'AAPL'
    
    if isinstance(stock, str):
@@ -187,7 +196,7 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
       # print(model)
    
    bal_init = stock.close.iloc[0]
-   logs, balances = run_backtest(model, stock, init_balance=bal_init, pos_type=pos_type)
+   logs, balances = run_backtest(model, stock, init_balance=bal_init, pos_type=pos_type, samples=samples)
    
    blogs = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
    blogs = blogs.set_index('datetime', drop=True)

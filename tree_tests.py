@@ -3,6 +3,7 @@ from math import floor
 from random import sample
 from pprint import pprint
 import numpy as np
+import pandas as pd
 # from numpy import typename
 import torch
 from torch import Tensor, tensor, typename
@@ -24,6 +25,9 @@ from tools import flatten_dict, unzip, maxby
 
 import gc
 from tqdm import tqdm
+
+import sys, os
+P = os.path
 
 def samples_for(symbol:str, seq_len:int, columns:List[str]):
    df:DataFrame = load_frame(symbol, './sp100')
@@ -78,17 +82,23 @@ def samples_for2(symbol:Union[str, DataFrame], analyze:Callable[[DataFrame], Dat
    
    #TODO scaling the data
    
+   tsi = []
    if x_timesteps == 1:
       X = data[:, xcols]
+      tsi = df.index.tolist()
+   
    else:
       #TODO breaking the data up into episodes of {x_timesteps} length
       n_episodes = len(data) - x_timesteps
       X = np.zeros((n_episodes, x_timesteps, len(xcols)))
       for i in range(n_episodes):
          X[i, :, :] = data[i:i+x_timesteps, xcols]
+         ts = df.index[i+x_timesteps]
+         tsi.append(ts)
+      
    y = data[:, ycol]
    
-   return X, y
+   return tsi, X, y
 
 def fmt_samples(x:Tensor, y:Tensor) -> Tuple[Tensor, Tensor]:
    print('x.shape = ', x.shape)
@@ -96,17 +106,62 @@ def fmt_samples(x:Tensor, y:Tensor) -> Tuple[Tensor, Tensor]:
    
    return x, y
 
-def split_samples(X, y, pct=0.2, shuffle=True):
-   if shuffle:
-      randsampling = torch.randint(0, len(X), (len(X),))
-      X, y = X[randsampling], y[randsampling]
+TupXY = Tuple[Tensor, Tensor, Tensor, Tensor]
+TupIXY = Tuple[List[pd.Timestamp], Tensor, Tensor, List[pd.Timestamp], Tensor, Tensor]
+def eq_sized(*els):
+   n = None
+   for el in els:
+      if n is None:
+         n = len(el)
+         continue
+      elif n != len(el):
+         return False
+   return True
+def ensure_eq_sized(*els):
+   assert eq_sized(*els), f'Inconsistent sizing: {list(map(len, els))}'
+   return els
 
+def split_samples(X=None, y=None, index=None, pct=0.2, shuffle=True)->Union[TupIXY, TupXY]:
+   assert (X is not None and y is not None)
+   if shuffle:
+      sampling = torch.randint(0, len(X), (len(X),))
+      # X, y = X[sampling], y[sampling]
+   else:
+      sampling = torch.arange(len(X))
+   # print(sampling)
+   
+   X, y = X[sampling], y[sampling]
+   assert len(X) == len(y)
+   
+   if index is not None:
+      index = [index[i] for i in sampling.tolist()]
+      assert len(index) == len(X)
+   
    test_split = pct
    spliti = round(len(X) * test_split)
+   
+   
    test_X, test_y = X[-spliti:], y[-spliti:]
    train_X, train_y = X[:-spliti], y[:-spliti]
+
+   split_vals = (
+      *ensure_eq_sized(train_X, train_y), 
+      *ensure_eq_sized(test_X, test_y)
+   )
    
-   return train_X, train_y, test_X, test_y
+   if index is not None:
+      train_index, test_index = (
+         index[:-spliti:],
+         index[-spliti:], 
+      )
+      
+      split_vals = (
+         *ensure_eq_sized(train_index, train_X, train_y), 
+         *ensure_eq_sized(test_index, test_X, test_y)
+      )
+   
+   return split_vals
+   
 
 def scale_dataframe(df:DataFrame, nq=500):
    from sklearn.preprocessing import QuantileTransformer
@@ -180,7 +235,7 @@ def test_indicator_config(symbol, indicators, config={}):
    
    return results.iloc[0]
 
-def test_minirocket(data=None):
+def test_minirocket(data=None, n_estimators=1):
    from tsai.models.MINIROCKET import MiniRocketClassifier, MiniRocketVotingClassifier
    from tsai.basics import get_UCR_data, timer
    
@@ -197,12 +252,14 @@ def test_minirocket(data=None):
    
    # Computes MiniRocket features using the original (non-PyTorch) MiniRocket code.
    # It then sends them to a sklearn's RidgeClassifier (linear classifier).
-   model = MiniRocketClassifier()
+   model = (MiniRocketClassifier() if n_estimators == 1 else MiniRocketVotingClassifier(n_estimators=n_estimators, n_jobs=1))
+   
    timer.start(False)
    model.fit(X_train, y_train)
    t = timer.stop()
    
    acc = model.score(X_valid, y_valid)
+   # MiniRocketClassifier()
    print(f'valid accuracy    : {acc:.3%} time: {t}')
    # del model
    
@@ -212,113 +269,163 @@ def test_minirocket(data=None):
    )
       
 if __name__ == '__main__':
-   # test_minirocket()
-   # exit()
-    
    from faux.pgrid import PGrid
    from features.ta.loadout import Indicators, IndicatorBag
    
-   hpg = PGrid(dict(
-      seq_len=[10]
-   ))
+   last_run_path = 'minirocket_exp_results.pickle'
+   best_config = None
    
-   #TODO: introduce a function to generate all combinations of N indicators
-   ib = IndicatorBag()
-   # ib.add('vwap', length=[10])
-   
-   ib.add('rsi', length=[2, 3])
-   ib.add('zscore', length=[2, 3])
-   
-   ib.add('bbands', length=[10], mamode=['vwma', 'wma'], std=[1.25])
-   # ib.add('accbands', length=[10])
-   
-   ib.add('bop')
-   ib.add('mom')
-   ib.add('inertia')
-   #TODO add more T/A options
-   
-   ibcl = ls([x for x in ib.sampling()], True)
-   print(ibcl)
-   
-   # TODO: convert the `expand` methods to generator functions, so that there aren't as many local functions allocated 
-   # TODO ...as there are combinations of indicator options
-   # ibcl = ib.expand()
-   idll = map(lambda d: Indicators(*d.items()), ibcl)
-   # 
-   hpdl = list(hpg.expand())
-   bests = []
+   if P.exists(last_run_path):
+      try:
+         #* load last-run-results
+         lrr:DataFrame = pd.read_pickle(last_run_path)
+         print(lrr)
+         best_config = lrr.iloc[0]
+      except Exception:
+         os.remove(last_run_path)
+         pass
+    
+   if best_config is None:
+      # Run GridSearch of all possible configurations
+      hpg = PGrid(dict(
+         seq_len=[10],
+         n_estimators=[1]
+      ))
+      
+      #TODO: introduce a function to generate all combinations of N indicators
+      ib = IndicatorBag()
+      # ib.add('vwap', length=[10])
+      
+      ib.add('rsi', length=[2, 3])
+      ib.add('zscore', length=[2, 3])
+      
+      ib.add('bbands', length=[10], mamode=['vwma', 'wma'], std=[1.25])
+      # ib.add('accbands', length=[10])
+      
+      ib.add('bop')
+      ib.add('mom')
+      ib.add('inertia')
+      #TODO add more T/A options
+      
+      ibcl = ls([x for x in ib.sampling()], True)
+      print(ibcl)
+      
+      # TODO: convert the `expand` methods to generator functions, so that there aren't as many local functions allocated 
+      # TODO ...as there are combinations of indicator options
+      # ibcl = ib.expand()
+      idll = map(lambda d: Indicators(*d.items()), ibcl)
+      # 
+      hpdl = list(hpg.expand())
+      bests = []
 
-   from time import sleep, time
-   from olbi import printing, configurePrinting
+      from time import sleep, time
+      from olbi import printing, configurePrinting
+      
+      train_symbol = 'AMZN'
+      pbar = tqdm(total=len(ibcl) * len(hpdl))
+      for data_transform in idll:
+         for hyperparams in hpdl:
+            pbar.update()
+            ts_idx, X, y = samples_for2(train_symbol, F(data_transform.apply), xcols_not=['open', 'high', 'low', 'close', 'datetime'], x_timesteps=hyperparams['seq_len'])
+            X = torch.from_numpy(X)
+            y = torch.from_numpy(y)
+            train_X, train_y, test_X, test_y = split_samples(X, y, 0.83, shuffle=False)
+            train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
+            
+            data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
+            
+            best = test_minirocket(data=data, n_estimators=hyperparams['n_estimators'])
+            best['indicators'] = data_transform.items()
+            best['hyperparams'] = hyperparams
+            del best['model']
+            
+            pprint(best)
+            
+            bests.append(best)
+            gc.collect()
    
-   train_symbol = 'AMZN'
-   pbar = tqdm(total=len(ibcl) * len(hpdl))
-   for data_transform in idll:
-      for hyperparams in hpdl:
-         pbar.update()
-         X, y = samples_for2(train_symbol, F(data_transform.apply), xcols_not=['open', 'high', 'low', 'close', 'datetime'], x_timesteps=hyperparams['seq_len'])
-         X = torch.from_numpy(X)
-         y = torch.from_numpy(y)
-         train_X, train_y, test_X, test_y = split_samples(X, y, 0.83)
-         train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
-         
-         data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
-         
-         best = test_minirocket(data=data)
-         best['indicators'] = data_transform.items()
-         best['hyperparams'] = hyperparams
-         del best['model']
-         
-         pprint(best)
-         
-         bests.append(best)
-         gc.collect()
+      explogs = DataFrame.from_records(bests)
+      alltimebest = maxby(bests, _['accuracy'])
+      print(alltimebest)
+      explogs:DataFrame = explogs.sort_values('accuracy', ascending=False)
+      explogs.to_pickle(last_run_path)
+      # explogs['indicators'] = explogs['indicators'].apply(lambda i: dict(i.items()))
+      print(explogs)
+      winner = explogs.iloc[0]
+      
+   elif best_config is not None:
+      winner = best_config
+      print('RESTORED winning configuration!')
+      print(winner)
    
-   explogs = DataFrame.from_records(bests)
-   alltimebest = maxby(bests, _['accuracy'])
-   print(alltimebest)
-   explogs:DataFrame = explogs.sort_values('accuracy', ascending=False)
-   explogs.to_pickle('minirocket_exp_results.pickle')
-   # explogs['indicators'] = explogs['indicators'].apply(lambda i: dict(i.items()))
-   print(explogs)
+   else:
+      raise Exception('unreachable')
+   
    #TODO now, take the best configuration and fit MINIROCKET on an aggregate dataset
    #TODO ...then, evaluate that on a comprehensive list of symbols, and document performance statistics
    #TODO ...on each symbol individually and en aggregate
 
-   winner = explogs.iloc[0]
    winning_analyzer = Indicators(*winner.indicators)
    winning_params   = winner.hyperparams
    
-   eval_symbols =  sample(list_stonks(), 50)
+   eval_symbols =  sample(list_stonks(), 100)
    
    tests = []
    for symbol in eval_symbols:
-      X, y = samples_for2(
-         symbol=symbol, 
-         analyze=F(winning_analyzer.apply), 
-         xcols_not=['open', 'high', 'low', 'close', 'datetime'], 
-         x_timesteps=winning_params['seq_len']
-      )
+      try:
+         ts_idx, X, y = samples_for2(
+            symbol=symbol, 
+            analyze=F(winning_analyzer.apply), 
+            xcols_not=['open', 'high', 'low', 'close', 'datetime'], 
+            x_timesteps=winning_params['seq_len']
+         )
+         
+         X = torch.from_numpy(X)
+         y = torch.from_numpy(y)
+         
+         train_idx, train_X, train_y, test_idx, test_X, test_y = split_samples(index=ts_idx, X=X, y=y, pct=0.36, shuffle=False)
+         train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
+         # train_y = train_y[:-train_X.shape[2]]
+         data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
+         print(train_X.shape, train_y.shape)
+         print(test_X.shape)         
+         res:Dict[str, Any] = test_minirocket(data=data, n_estimators=5)
+         res['symbol'] = symbol
+         
+         tests.append(res)
+         
+         #TODO run the backtest on the model
+         _mdl = res['model']
+
+         print(_mdl.predict(test_X.numpy()))
+         # input()
+         
+         def wmodel(X: Tensor):
+            if X.ndim == 2:
+               X = X.unsqueeze(0)
+            elif X.ndim == 3:
+               pass
+            
+            assert X.shape[2] == winning_params['seq_len']
+            
+            ypred = _mdl.predict(X.numpy())
+            # print(ypred)
+            
+            return torch.from_numpy(ypred)
+         
+         from coinflip_backtest import backtest
+         
+         totlist = lambda a: [a[i] for i in range(len(a))]
+         
+         sample_triples = zip(ts_idx[-365:], totlist(test_X)[-365:], totlist(test_y)[-365:])
+         btres = backtest(symbol, wmodel, samples=sample_triples)
+         print(btres)
       
-      X = torch.from_numpy(X)
-      y = torch.from_numpy(y)
-      
-      train_X, train_y, test_X, test_y = split_samples(X, y, 0.83)
-      train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
-      
-      data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
-      
-      res:Dict[str, Any] = test_minirocket(data=data)
-      res['symbol'] = symbol
-      # best['indicators'] = winning_analyzer.items()
-      # best['hyperparams'] = winning_params
-      # del best['model']
-      
-      # pprint(best)
-      
-      tests.append(res)
+      except TypeError as e:
+         print(e)
+         continue
    
-   tests = DataFrame.from_records(tests).sort_values('accuracy', ascending=False)['symbol', 'accuracy', 'model']
+   tests = DataFrame.from_records(tests).sort_values('accuracy', ascending=False)[['symbol', 'accuracy', 'model']]
    print(tests)
    tests.to_pickle('minirocket_results.pickle')
    
