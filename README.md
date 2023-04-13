@@ -1,23 +1,30 @@
 
-## FauxNet - Neural Networks for Big-Business-Boys
-#### (**very much** a WIP)
+## Faux ~~<sub>**Net**</sub>~~
+
+#### A Toolset for assisting the development of AI-enhanced Algorithmic Trading Systems
 
 ---
 
-### 'CoinFlipNet' - A binary, BUY/SELL signal generation network
-#### Current status: experimental
+## Notes:
+ - **very** much a work-in-progress, and frankly a mess
+ - much of the code present in the repository is partially written, experimental, or just flat-out broken!
+   - in such cases, the code will most likely not contain any notes to say that it is (incomplete, an old experiment, broken), so caution is strongly advised.
+ - the code that does work as intended is often poorly documented
+ - use at your own risk, and in so doing understand that neither I nor any other contributors (direct or indirect) to this repo are responsible in any way, for any effect or outcome brought about by the evaluation (be it by a Python interpreter, or any other means by which code might be interpreted) of any code found in this repository, now or at any time in the future. 
+ **YOU (i.e. the "User") TAKE FULL RESPONSIBILITY** for any/all effects of evaluation of said code, regardless of the desirability of those effects; 
+ 
+> You have been warned
 
-  Insert description of the network, its parameters and the methodology behind it here. Lorem ipsom dolor sit amet, consectetur adipiscing
-elit et justo ex eiusmod tempor incididunt ut labore et dolore mag nulore magna aliqua. Ut enim ad minim veniam and yup and stuff...
+---
 
-  Anyhow, here are some charts demonstrating the efficacy of this module as tested on the following symbols: `MSFT, GOOG, GOOGL, TSLA, AAPL, SONY, INTC, NVDA, AMD, HPE`
+## Features and Capabilities
+ - Decent backtesting support, via `faux.backtesting.Backtest`
+ - Fluent composition of parameter-grids for hyperparameter tuning, via `faux.PGrid`
+  
 
-![MSFT](figures/AAPL_coin_flip_net.png)
-![GOOG](figures/GOOG_coin_flip_net.png)
-![GOOGL](figures/GOOGL_coin_flip_net.png)
-![TSLA](figures/TSLA_coin_flip_net.png)
-![AAPL](figures/AAPL_coin_flip_net.png)
-![INTC](figures/INTC_coin_flip_net.png)
-![NVDA](figures/NVDA_coin_flip_net.png)
-![AMD](figures/AMD_coin_flip_net.png)
-![HPE](figures/HPE_coin_flip_net.png)
+## TODOs / Planned Features
+ - Fluent composition of TS-processing procedures, via `faux.TSFnPipeline`
+ - 
+ - Automatic conversion of pinescript source code into an equivalent Python implementation. The usefulness may not be obvious, but it would make considerably more technical-indicators available within this framework without having to manually implement all of indicators not found in any of the major TA libraries for Python.
+   - Possibly also partial support for conversion of EasyLanguage scripts to Python, though from my limited knowledge of the subject, this would probably not be useful in very many cases
+ - ...
