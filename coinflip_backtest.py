@@ -133,12 +133,12 @@ def run_backtest(model, df:pd.DataFrame=None, samples:Iterable[Tuple[pd.Timestam
    # bX, by = tuple(map(F(methodcaller('numpy')) >> np.asanyarray, (bX, by)))
    numpify = lambda xxx: np.asanyarray(list(map(lambda v: (v.numpy() if isinstance(v, Tensor) else v), xxx)), dtype='float64')
    bX, by = numpify(bX), numpify(by)
-   print(bX)
+   # print(bX)
    
    for time, X, y in backtest_on:
       ypred = model(X).detach().long()[0].item()
       # print(y.item(), ypred)
-      if y.item() == ypred:
+      if (y if isinstance(y, int) else y.item()) == ypred:
          right += 1
       else:
          wrong += 1
@@ -189,6 +189,7 @@ def run_backtest(model, df:pd.DataFrame=None, samples:Iterable[Tuple[pd.Timestam
 # def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None):
 def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long', on_sampler=None, samples=[], **kwargs):
    ticker:str = 'AAPL'
+   from faux.backtesting.backtester import Backtester
    
    if isinstance(stock, str):
       ticker = stock
@@ -204,21 +205,11 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
       # print(model)
    
    bal_init = stock.close.iloc[0]
-   logs, balances = run_backtest(model, stock, init_balance=bal_init, pos_type=pos_type, samples=samples, **kwargs)
+   tester = Backtester(model, df=stock, samples=samples, init_balance=bal_init, pos_type=pos_type)
+   logs, balances = tester.run()
+   blogs = tester.summarize(plot=True, showfig=False)
    
-   blogs = pd.DataFrame.from_records(balances, columns=('datetime', 'balance'))
-   blogs = blogs.set_index('datetime', drop=True)
-   
-   close = stock.loc[blogs.index]['close']
-   blogs['close'] = close
-   blogs['delta'] = close.pct_change()
-   close_init = close.iloc[0]
-   close_final = close.iloc[-1]
-   baseline_roi = float(close_final / close_init)
-   blogs['baseline_roi'] = (close / close_init)
-   blogs['roi'] = (blogs.balance / bal_init)
-   print(blogs)
-   
+   baseline_roi = blogs.baseline_roi.iloc[-1]
    bals:pd.Series = blogs.balance
    bal_final = bals.iloc[-1]
    rois = bals.diff().iloc[1:]

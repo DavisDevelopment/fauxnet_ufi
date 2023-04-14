@@ -21,7 +21,7 @@ from fn import F, _
 from cytoolz import *
 
 from pandas import DataFrame, Series
-from tools import flatten_dict, unzip, maxby
+from tools import flatten_dict, hasmethod, unzip, maxby
 
 import gc
 from tqdm import tqdm
@@ -65,8 +65,8 @@ def samples_for2(symbol:Union[str, DataFrame], analyze:Callable[[DataFrame], Dat
       raise ValueError('baw')
    
    df['tmrw_close'] = df['close'].shift(-1)
-   df['SIG'] = (df['tmrw_close'] > df['close']).astype('int')
    
+   df[ycol] = (df['tmrw_close'] > df['close']).astype('int')
    df = analyze(df)
    df = df.fillna(method='bfill').dropna()
    
@@ -268,7 +268,50 @@ def test_minirocket(data=None, n_estimators=1):
       accuracy=acc,
       model=model
    )
+
+def wrapped_minirockets(self, X:Tensor):
+   if hasmethod(self, 'predict'):
+      model = self
+   elif isinstance(self, dict) and 'model' in self:
+      model = self['model']
+   else:
+      raise ValueError('invalid self')
+
+   if X.ndim == 2:
+      X = X.unsqueeze(0)
+   elif X.ndim == 3:
+      pass
+   
+   # assert X.shape[2] == winning_params['seq_len'], f'expected {winning_params["seq_len"]}, but got {X.shape[2]}'
+   
+   ypred = model.predict(X.numpy())
+   
+   return torch.from_numpy(ypred)      
       
+from coinflip_backtest import backtest
+from time import sleep
+      
+def backtest_minirockets(symbol, ts_idx, test_X, test_y, model, n_eval_days=90):
+   totlist = lambda a: [a[i] for i in range(len(a))]
+         
+   slbeg, slend = -(n_eval_days * 2), -n_eval_days
+   
+   # times = tensor(list(map(lambda d: d.to_datetime64().astype('int64'), ts_idx[slbeg:slend])))
+   times = ts_idx[slbeg:slend]
+   bX = test_X[slbeg:slend]
+   by = test_y[slbeg:slend]
+   print([type(x).__name__ for x in (times, bX, by)])
+   
+   # input()
+   # sample_triples = list(zip(times, totlist(test_X)[slbeg:slend], totlist(test_y)[slbeg:slend]))
+   # print(list(map((F(type) >> _.__name__), next(iter(sample_triples)))))
+   # sleep(10.0)
+   
+   wmodel = partial(wrapped_minirockets, model)
+   btres = backtest(symbol, wmodel, samples=(times, bX, by), pos_type='long')
+   
+   return btres
+   
 if __name__ == '__main__':
    from faux.pgrid import PGrid
    from features.ta.loadout import Indicators, IndicatorBag
@@ -289,29 +332,29 @@ if __name__ == '__main__':
    if best_config is None:
       # Run GridSearch of all possible configurations
       hpg = PGrid(dict(
-         seq_len=[10],
-         n_estimators=[1]
+         seq_len=[20, 30, 40],
+         n_estimators=[3]
       ))
       
       #TODO: introduce a function to generate all combinations of N indicators
       ib = IndicatorBag()
       
-      ib.add('rsi', length=[2, 3])
-      ib.add('zscore', length=[2, 3])
+      ib.add('rsi', length=[2])
+      ib.add('zscore', length=[2])
       
-      ib.add('bbands', length=[10], mamode=['vwma', 'wma'], std=[1.25])
+      ib.add('bbands', length=[10], mamode=['vwma'], std=[1.25])
       # ib.add('donchian', length=[10])
-      ib.add('accbands', length=[10])
+      # ib.add('accbands', length=[10])
       
       ib.add('delta_vwap')
-      ib.add('vwap')
-      ib.add('bop')
-      ib.add('mom')
-      ib.add('inertia')
-      ib.add('atr')
+      # ib.add('vwap')
+      # ib.add('bop')
+      # ib.add('mom')
+      # ib.add('inertia')
+      # ib.add('atr')
       #TODO add more T/A options
       
-      ibcl = ls([x for x in ib.sampling(2)], True)
+      ibcl = ls([x for x in ib.sampling(4)], True)
       # ibcl = ls(ib.expand(), True)
       print(ibcl)
       
@@ -326,17 +369,23 @@ if __name__ == '__main__':
       from time import sleep, time
       from olbi import printing, configurePrinting
       
-      train_symbol = 'AMZN'
+      train_symbol = 'PAYC' # 'AMZN'
       pbar = tqdm(total=len(ibcl) * len(hpdl))
+      
       for data_transform in idll:
          for hyperparams in hpdl:
             pbar.update()
-            ts_idx, X, y = samples_for2(train_symbol, F(data_transform.apply), xcols_not=['open', 'high', 'low', 'close', 'datetime'], x_timesteps=hyperparams['seq_len'])
+            ts_idx, X, y = samples_for2(
+               symbol=train_symbol, 
+               analyze=F(data_transform.apply), 
+               xcols_not=['open', 'close', 'datetime'], 
+               x_timesteps=hyperparams['seq_len']
+            )
             X = torch.from_numpy(X)
             y = torch.from_numpy(y)
             
             #* train the model on 85% of the available data, evaluating on the remaining 15%
-            train_X, train_y, test_X, test_y = split_samples(X=X, y=y, pct=0.15, shuffle=True)
+            train_X, train_y, test_X, test_y = split_samples(X=X, y=y, pct=0.25, shuffle=True)
             train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
             
             data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
@@ -344,7 +393,14 @@ if __name__ == '__main__':
             best = test_minirocket(data=data, n_estimators=hyperparams['n_estimators'])
             best['indicators'] = data_transform.items()
             best['hyperparams'] = hyperparams
+            
+            model = best['model']
             del best['model']
+            
+            # wmodel = partial(wrapped_minirockets, model)
+            btres = backtest_minirockets(train_symbol, ts_idx, test_X, test_y, model, n_eval_days=60)
+            best['roi'] = btres['roi']
+            #TODO backtest the model here, to factor profit-performance into configuration-selection
             
             pprint(best)
             
@@ -352,13 +408,18 @@ if __name__ == '__main__':
             gc.collect()
    
       explogs = DataFrame.from_records(bests)
-      alltimebest = maxby(bests, _['accuracy'])
+      alltimebest = maxby(bests, _['roi'])
       print(alltimebest)
-      explogs:DataFrame = explogs.sort_values('accuracy', ascending=False)
+      explogs:DataFrame = explogs.sort_values('roi', ascending=False)
       explogs.to_pickle(last_run_path)
       # explogs['indicators'] = explogs['indicators'].apply(lambda i: dict(i.items()))
       print(explogs)
+      
       winner = explogs.iloc[0]
+      
+      winners = explogs.iloc[:5]
+      print(winners)
+      #TODO evaluate top-K winners on each symbol in the loop below, saving the configuration which worked best for each given symbol
       
    elif best_config is not None:
       winner = best_config
@@ -375,7 +436,7 @@ if __name__ == '__main__':
    winning_analyzer = Indicators(*winner.indicators)
    winning_params   = winner.hyperparams
    
-   eval_symbols =  sample(list_stonks(), 100)
+   eval_symbols =  sample(list_stonks(), 50)
    
    tests = []
    for symbol in eval_symbols:
@@ -383,59 +444,42 @@ if __name__ == '__main__':
          ts_idx, X, y = samples_for2(
             symbol=symbol, 
             analyze=F(winning_analyzer.apply), 
-            xcols_not=['open', 'high', 'low', 'close', 'datetime'], 
+            xcols_not=['open', 'close', 'datetime'], 
             x_timesteps=winning_params['seq_len']
          )
          
          X = torch.from_numpy(X)
          y = torch.from_numpy(y)
          
-         train_idx, train_X, train_y, test_idx, test_X, test_y = split_samples(index=ts_idx, X=X, y=y, pct=0.36, shuffle=False)
+         train_idx, train_X, train_y, test_idx, test_X, test_y = split_samples(index=ts_idx, X=X, y=y, pct=0.12, shuffle=False)
          train_X, test_X = tuple((v.unsqueeze(1) if v.ndim == 2 else v.swapaxes(1, 2)) for v in (train_X, test_X))
          # train_y = train_y[:-train_X.shape[2]]
          data = tuple(map(lambda v: v.numpy(), (train_X, train_y, test_X, test_y)))
-         print(train_X.shape, train_y.shape)
-         print(test_X.shape)         
          res:Dict[str, Any] = test_minirocket(data=data, n_estimators=5)
          res['symbol'] = symbol
          
          tests.append(res)
          
          #TODO run the backtest on the model
-         _mdl = res['model']
-
-         # print(_mdl.predict(test_X.numpy()))
-         # input()
          
-         def wmodel(X: Tensor):
-            if X.ndim == 2:
-               X = X.unsqueeze(0)
-            elif X.ndim == 3:
-               pass
-            
-            assert X.shape[2] == winning_params['seq_len']
-            
-            ypred = _mdl.predict(X.numpy())
-            # print(ypred)
-            
-            return torch.from_numpy(ypred)
+         btres = backtest_minirockets(symbol, ts_idx, test_X, test_y, res['model'])
          
-         from coinflip_backtest import backtest
-         
-         totlist = lambda a: [a[i] for i in range(len(a))]
-         
-         slbeg, slend = -(365 * 2), -365
-         sample_triples = zip(ts_idx[slbeg:slend], totlist(test_X)[slbeg:slend], totlist(test_y)[slbeg:slend])
-         btres = backtest(symbol, wmodel, samples=sample_triples, pos_type='both')
-         print(btres)
+         res['roi'] = btres['roi']
       
-      except TypeError as e:
+      # except TypeError as e:
+      #    print(e)
+      #    continue
+      
+      except ValueError as e:
          print(e)
          continue
    
-   tests = DataFrame.from_records(tests).sort_values('accuracy', ascending=False)[['symbol', 'accuracy', 'model']]
+   tests = DataFrame.from_records(tests).sort_values('roi', ascending=False)[['symbol', 'roi', 'accuracy', 'model']]
    print(tests)
    tests.to_pickle('minirocket_results.pickle')
+   
+   model_efficacy = len(tests[tests.roi > 1.0])/len(tests)
+   print('model efficacy: ', model_efficacy)
    
    exit()
    
