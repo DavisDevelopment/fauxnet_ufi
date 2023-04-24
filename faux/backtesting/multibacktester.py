@@ -17,11 +17,14 @@ from itertools import zip_longest
 from fn import F, _
 from tools import nor, unzip, nn, isiterable, Struct, safe_div
 from typing import *
-from faux.backtesting.common import ensure_eq_sized, ensure_equivalence
+from faux.backtesting.common import ensure_eq_sized, ensure_equivalence, renormalize
 
 from tree_tests import ensure_eq_sized
 from cytoolz.dicttoolz import merge, assoc, dissoc, keyfilter, valmap, valfilter, itemfilter, itemmap
 from pandas import DataFrame, Series
+from termcolor import colored
+
+from faux.backtesting.backtester import Backtester as Sub
 
 # In[3]:
 
@@ -206,39 +209,57 @@ class PolySymBacktester:
       
       self.mount_subs(symbols=self.models, datasets=self.datasets, samples=self.samples, models=self.models)
       
+   #TODO: write method for computing the 'state-encoding' for the current state
+      
    def run(self):
       for sample in self.loop:
          time = sample.time
          signals = sample.signals
          # print(signals)
          assert isiterable(signals), f'{type(signals).__qualname__}'
+         # pprint.pprint(sample, depth=2)
          
+         #* enumerate signals
          buy_signals = set()
          sell_signals = set()
-         for symId, signal in enumerate(signals):
+         sigvec = ''.join([str(label.item()) for label in signals.values()])
+         print('SIGNALS=', sigvec)
+         
+         for symId, signal in signals.items():
+            # print(f'SIGNAL(symbol="{symId}", label={signal})')
             if signal == 1:
                buy_signals.add(symId)
+               
             elif signal == 0:
                sell_signals.add(symId)
          
          #* liquidate positions in stock which is projected to go downward
-         held = self.portfolio
+         held_pre = self.portfolio
          for symId in sell_signals: 
             #TODO close both LONG and SHORT positions (when they are not projected to be profitable)
             sym = self.symbols[symId]
-            if sym in held:
+            if sym in held_pre:
                self.close_long(time, sym)
          
+         if len(buy_signals) > 0:
+            print(set(map(self.symbols.__getitem__, buy_signals)))
+         
          investable_liquidity = min(self.dollars, 250000.0)
-         max_exposure_per_symbol = safe_div(investable_liquidity, len(buy_signals))
+         max_exposure_per_symbol:float = safe_div(investable_liquidity, len(buy_signals))
          
          #* open positions in stock which is projected to go upward
          for symId in buy_signals:
             sym = self.symbols[symId]
+            
             if self.pos_type in ('long', 'both'):
-               self.open_long(time, sym)
+               self.open_long(time, sym, bp=max_exposure_per_symbol)
+               
+            else:
+               print(f'WARNING: Unknown position_type "{self.pos_type}"')
          
-         self.holdings_logs.append((time, self.dollars, self.dollars + self.portfolio_value(time), self.portfolio))
+         held_post = self.portfolio
+         
+         self.holdings_logs.append((time, self.dollars, self.dollars + self.portfolio_value(time), (held_pre, held_post)))
          
       print('DONE')
       summary:DataFrame = DataFrame.from_records(self.holdings_logs, columns=['time', 'dollars', 'balance', 'portfolio']).set_index('time', drop=False)
@@ -280,7 +301,6 @@ class PolySymBacktester:
    def mount_subs(self, symbols=[], datasets=[], samples=[], models=[]):
       ensure_eq_sized(symbols, datasets, samples, models)
       # from .backtester import Backtester as Sub
-      from faux.backtesting.backtester import Backtester as Sub
       
       subs = self.subs = []
       
@@ -290,6 +310,15 @@ class PolySymBacktester:
          subs.append(sub)
       
       self.loop = ConcurrentBTLoopEnumeration(self)
+      
+   def sub_accuracy(self, symbol:Union[int, str])->float:
+      sub:Sub = self.subs[self.symbols.index(symbol) if isinstance(symbol, str) else symbol]
+      if sub.total == 0:
+         return 1.0
+      else:
+         print(sub.total, sub.right, sub.wrong)
+         accuracy = safe_div(sub.right, sub.total) * 100.0
+         return accuracy
       
    def transact(self, symbol, kind, time, volume, price):
       if isinstance(symbol, int):
@@ -310,7 +339,7 @@ class PolySymBacktester:
       
       self.transact(symbol, 'S', t, vol, today_close)
       
-   def open_long(self, t, symbol, w=1.0, bp=None):
+   def open_long(self, t, symbol, w=None, bp=None):
       """
       Buy as many shares of the given stock as possible using the available
       dollars, at the current market price at time t.
@@ -328,12 +357,23 @@ class PolySymBacktester:
       """
       if isinstance(symbol, int):
          symbol = self.symbols[symbol]
+      
+      symMdlAccuracy:float = self.sub_accuracy(symbol)
+      
       today_close = self.datasets[symbol]['close'].loc[t]
-      bp = bp if bp is not None else self.dollars
-
-      assert self.dollars >= bp, f'Insufficient funds. Specified buying power exceeds available balance'
-      #to buy {symbol}; have ${self.dollars:,.2f} but need '
+      bp:float = bp if bp is not None else self.dollars
+      avail = round(self.dollars, 6)
+      bp = min(avail, round(bp, 6))
+      
+      w:float = w if w is not None else (renormalize(symMdlAccuracy, 50.0, 100.0, 0.0, 1.0))
+      
+      assert avail >= bp, f'Insufficient funds. Specified buying power exceeds available balance (${bp} > {avail})'
+      
       if bp == 0:
+         print('man, you broke')
+         return
+      elif w == 0:
+         print(colored('you have no idea what you are doing', 'light_red', attrs=['bold']))
          return
 
       if symbol not in self.holdings:
@@ -341,11 +381,15 @@ class PolySymBacktester:
 
       #TODO factor trading fees into the transaction
       if self.holdings[symbol] >= 0:
-         # Open a new long position
-         vol = (w * (bp / today_close))
-         self.holdings[symbol] += vol
-         self.dollars -= (vol * today_close)
+         print(f'{symbol} accuracy: {symMdlAccuracy:.2f}%')
+         #* Open a new long position
+         vol:float = (bp / today_close) #? no. of shares that can be purchased with specified buying power
+         vol = (vol * w) #? scaled proportionally with the confidence (for now, simply accuracy) level of the model which suggested the position
+         
+         self.holdings[symbol] += vol #? add these shares to our portfolio
+         self.dollars -= (vol * today_close) #? subtract the cost of those shares from our pool of dollars
          self.transact(symbol, 'B', t, vol, today_close)
+      
       else:
          # Close the existing short position and open a new long position
          vol = -self.holdings[symbol]

@@ -633,38 +633,43 @@ def get_config_space():
    from faux.pgrid import PGrid
    from faux.features.ta.loadout import IndicatorBag, Indicators
    
+   #TODO load the space of possible configurations from a JSON file
+   
    # Run GridSearch of all possible configurations
    hpg = PGrid(dict(
       seq_len=[15, 25, 35],
       n_estimators=[1]
    ))
    
-   #TODO: introduce a function to generate all combinations of N indicators
    ib = IndicatorBag()
    ib.add('rsi', length=[2])
    ib.add('zscore', length=[2])
    ib.add('bbands', length=[10], mamode=['vwma'], std=[1.25])
    ib.add('delta_vwap')
-   
+   ib.add('atr')
    ib.add('stoch')
-   # ib.add('atr')
    ib.add('obv')
+   #TODO add more indicators to the list
    
-   ibcl = ls([x for x in ib.sampling(5)], True)
+   ibcl = ls([x for x in ib.sampling(4)], True)
    
    feature_specs = [x for x in map(lambda d: Indicators(*d.items()), ibcl)]
    random.shuffle(feature_specs)
 
    param_specs = list(hpg.expand())
    
-   return param_specs, feature_specs[:18]
+   return param_specs, feature_specs
 
-def polyfinetune():
+def polyfinetune(fresh=False):
    from faux.features.ta.loadout import Indicators
    # from faux.backtesting.multibacktester import samples_from
+   
    pofn = 'symbol_optima.pickle'
    pretrained_model_file = 'models_finetuned.pickle'
    initial_tunings_file = '.initial_tunings.pickle'
+   if fresh:
+      for filename in (pofn, pretrained_model_file, initial_tunings_file):
+         os.remove(filename)
    
    if P.exists(pretrained_model_file):
       models:Dict[str, Any] = pickle.load(open(pretrained_model_file, 'rb'))
@@ -676,24 +681,24 @@ def polyfinetune():
       
       if P.exists(initial_tunings_file):
          symbols, pspecs, fspecs = pickle.load(open(initial_tunings_file, 'rb'))
-         pspecs = pspecs[0:1]
+         pspecs = pspecs
          optima = {}
       
       else:
          optima = {}
          symbols = sample(list_stonks(), 20)
          pspecs, fspecs = get_config_space()
-         print(fspecs)
-         print(len(fspecs))
+         # print(fspecs)
+         # print(len(fspecs))
          
          results = finetune_for(symbols[0], pspecs, fspecs, model_ctor=None, val_split=0.05, n_eval_days=100)
-         for r in results:
-            print(tuple(r.values()))
+         # for r in results:
+         #    print(tuple(r.values()))
          # input()
          
          pspecs = [r['hyperparams'] for r in results]
          fspecs = [r['transform'] for r in results]
-         pspecs = pspecs[0:1]
+         pspecs = [pspecs[-1]]
          
          optima[symbols[0]] = (pspecs[0], results[0]['transform'])
          pickle.dump((symbols, pspecs, fspecs), open(initial_tunings_file, 'wb+'))
@@ -718,7 +723,7 @@ def polyfinetune():
          # break
       
       pickle.dump(optima, open(pofn, 'wb+'))
-      pprint(failures)
+      # pprint(failures)
       print('OPTIMA-TUINING COMPLETE')
       
       models = {}
@@ -727,7 +732,7 @@ def polyfinetune():
             continue
          
          (pspec, ispecs) = optima[sym]
-         print(type(ispecs).__qualname__)
+         # print(type(ispecs).__qualname__)
          
          tspec = ispecs if callable(ispecs) else Indicators(*ispecs)
          
@@ -746,35 +751,42 @@ def polyfinetune():
       
    assert models is not None
    
+   #* (for debugging purposes) print the configuration and model-entries with which the backtest is about to be run
+   for (sym, model_info) in models.items():
+      configurePrinting(tracing=False)
+      print(f'== {sym} ==')
+      pprint(model_info)
+      configurePrinting(tracing=True)
+   
    #* load models
    model_entries = models
-   pprint(model_entries)
+   # pprint(model_entries)
    models, params, transforms = ({}, {}, {})
    for sym in symbols:
       e = model_entries[sym]
-      print(e)
-      if e is None: continue
+      # print(e)
+      if e is None:
+         continue
+      
       elif isinstance(e, dict):
          attrs = tuple(e.keys())
-         print(attrs)
          assert 'model' in e
          assert 'hyperparameters' in e
          assert 'indicators' in e
+         
          models[sym] = e['model']
          params[sym] = e['hyperparameters']
          transforms[sym] = e['indicators']
          
-   # models = {sym:model_entries[sym]['model'] for sym in symbols}
    params = [params[sym] for sym in symbols]
    transforms = [model_entries[sym]['indicators'] for sym in symbols]
-   
    models = [partial(wrapped_minirockets, models[sym]) for sym in symbols]
    
    from faux.backtesting.multibacktester import PolySymBacktester, backtest
    
-   hist = final_backtest_summary = backtest(symbols, params=params, transforms=transforms, model=models, date_begin='2022-01-01')
+   tester, hist = final_backtest_summary = backtest(symbols, params=params, transforms=transforms, model=models, date_begin='2022-01-01')
    print(hist)
-                  
+
    return models
    
 if __name__ == '__main__':

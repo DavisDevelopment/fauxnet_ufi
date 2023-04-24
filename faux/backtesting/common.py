@@ -6,6 +6,19 @@ from pandas import DataFrame
 from coretools import load_frame
 from tools import isiterable
 
+def renormalize(n, min1=None, max1=None, min2=None, max2=None):
+   # if min1 is not None and max1 is not None and min2 is None and max2 is None:
+      # min2, max2 = min1, max1
+      # min1, max1 = n.min(), n.max()
+   
+   assert min1 is not None and max1 is not None, f'first range must be provided via min1 and max1 arguments'
+   assert min2 is not None and max2 is not None, f'second range must be provided via min2 and max2 arguments'
+   
+   delta1 = max1 - min1
+   delta2 = max2 - min2
+   
+   return (delta2 * (n - min1) / delta1) + min2
+
 def samples_for(symbol:Union[str, DataFrame], analyze:Callable[[DataFrame], DataFrame], xcols=None, xcols_not=[], x_timesteps=1, y_type='pl_binary', y_lookahead=1):
    if isinstance(symbol, str):
       df:DataFrame = load_frame(symbol)

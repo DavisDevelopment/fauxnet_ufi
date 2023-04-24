@@ -27,8 +27,6 @@ class Backtester:
       self.dollars = self.init_balance
       self.dollars_init = self.dollars
       self.last_time = None
-      self.wrong = 0
-      self.right = 0
       self._has_run = False
       self._batched_samples = False
       
@@ -49,6 +47,8 @@ class Backtester:
          raise ValueError('You must be ' + mirror('po') + 'ing me')
       
       self.backtest_on = self.samples
+      self.wrong = 0
+      self.right = 0
             
    def numpify(self, xxx):
       return np.asanyarray(list(map(lambda v: (v.numpy() if isinstance(v, Tensor) else v), xxx)), dtype='float64')
@@ -151,6 +151,8 @@ class Backtester:
 
    def loop(self):
       ypred = self.generate_signals()
+      self.total = self.right = self.wrong = 0
+      
       if self._batched_samples:
          bT, bX, by = self.samples
          
@@ -158,10 +160,23 @@ class Backtester:
             t, x, yt = bT[i], bX[i], by[i]
             yp = ypred[i]
             
+            if yt == yp:
+               self.right += 1
+            else:
+               self.wrong += 1
+            self.total += 1
+            
             yield i, t, x, yt, yp
       else:
          for i, (t, x, yt) in enumerate(self.each_sample()):
             yp = ypred[i]
+            
+            if yt == yp:
+               self.right += 1
+            else:
+               self.wrong += 1
+            self.total += 1
+            
             yield i, t, x, yt, yp
 
    def generate_signals(self):
