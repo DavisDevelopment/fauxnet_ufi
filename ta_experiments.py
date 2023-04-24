@@ -342,7 +342,7 @@ def make_indicator_nodes()->Dict[str, Union[Node, Dict[str, Node]]]:
          
 indicator_nodes = make_indicator_nodes()
 
-import features.ta.volatility as fta
+import faux.features.ta.volatility as fta
 
 indicator_nodes['bbands'] = indicator_nodes['volatility.bbands'] = mkNode('bbands', fta.bbands)
 indicator_nodes['donchian'] = indicator_nodes['volatility.donchian'] = mkNode('donchian', fta.donchian)

@@ -20,6 +20,19 @@
 ## Features and Capabilities
  - Decent backtesting support, via `faux.backtesting.Backtest`
  - Fluent composition of parameter-grids for hyperparameter tuning, via `faux.PGrid`
+
+## Usage Guide
+
+  Basic Usage:
+  ```bash
+  # from project root
+  python3.8 main.py <cmd> [options]
+  ```
+
+  Available Commands:
+   - 
+### Available Commands
+ 
   
 
 ## TODOs / Planned Features

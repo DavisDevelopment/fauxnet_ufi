@@ -1,0 +1,38 @@
+{
+   "engine": "faux:trade",
+   "title": "Example Experiment",
+   "description": "...",
+   
+   "data": {
+      "features": [
+         "pct_change(close)",
+         "${MAMODE}(pct_change(close))",
+         {"ta.zscore": {"length": 2}},
+         {"ta.bbands": {"length": "$n_input_timesteps"}},
+         ["<class_name>", null, null],
+         {"`#python code to evaluate; binds the return value`": null}
+      ],
+      "labels": "pl_binary",
+      "train_on": {
+         "symbol": "?",
+         "after": "01-01-2015",
+         "before": "01-01-2022"
+      },
+      "evaluate_on": {
+         "symbol": "?"
+      }
+   },
+
+   "parameters": {
+      "n_input_timesteps": [30, 40, 60],
+      "n_estimators": [1, 3]
+   },
+
+   "strategy": {
+      "signal_generator": {
+         "ml:minirockets": {}
+      }
+   },
+
+   "$$selected_parameter_tuning": null
+}

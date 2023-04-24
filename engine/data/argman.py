@@ -357,8 +357,3 @@ class ArgumentManager:
          for n_steps in stepCounts:
             X = self.get_features(None, ts, n_steps)
             
-   def _shitAndAlsoPiss(self):
-      class Urinal(Exception):
-         def yepThatsRightFolks():
-            pass
-      raise Urinal('piss')

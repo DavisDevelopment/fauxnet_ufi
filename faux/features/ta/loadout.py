@@ -9,12 +9,12 @@ from faux.pgrid import PGrid
 from inspect import isfunction, signature
 import random
 from random import sample
-from itertools import product
+from itertools import product, combinations
 from tools import isiterable, dotget
 from cachetools import cached
 from functools import lru_cache
 
-import features.ta.volatility as vta
+import faux.features.ta.volatility as vta
 
 typename = lambda x: type(x).__qualname__
 
@@ -134,17 +134,25 @@ class Indicators:
    def add(self, ind_name:str, doptions=None, **kwoptions):
       if doptions is None:
          options = kwoptions.copy()
+      elif isinstance(doptions, list) and len(doptions) == 1:
+         options = merge(doptions[0], kwoptions)
       else:
+         # print(doptions)
          options = merge(doptions, kwoptions)
       wfn = bind_indicator(ind_name)
       self.l.append((ind_name, options, wfn))
       return self
    
    def apply(self, df:pd.DataFrame, inplace=False, append=False):
+      name = df.name
       df = df if inplace else df.copy()
       for (name, options, fn) in self.l:
          df = fn(df, options, inplace=inplace, append=append)
+      df.name = name
       return df
+   
+   def __call__(self, df:pd.DataFrame, inplace=False, append=False):
+      return self.apply(df, inplace=inplace, append=append)
    
    def items(self):
       return [(n, o) for n,o,f in self.l]
@@ -171,18 +179,26 @@ class IndicatorBag:
       return self
    
    def sampling(self, N:int=3, batched=False):
+      from fn import F
+      
       item_indices = list(range(len(self.l)))
-      idx_samples = product(*([item_indices] * N))
-      #TODO
+      idx_samples = set(map(F(set) >> tuple, product(*([item_indices] * N))))
+            
+      # input()
+      #TODO refactor entire class (PGrid as well!) to use `itertools.combinations` over `.product`
+      #? mostly so as to reduce the number of different values that need to be tested
       
       for betty in idx_samples:
-         if len(set(betty)) != N:
+         if len(betty) != N:
             continue
+         
          sampled_items = tuple(self.l[i] for i in betty)
          
          if batched:
+            # print("BATCHED")
             yield self.combinations(items=sampled_items)
          else:
+            # print("NOT BATCHED")
             yield from self.expand(items=sampled_items)
    
    def expand(self, items=None):
@@ -197,13 +213,10 @@ class IndicatorBag:
          kl.append(k)
          pgl.append(pg.expand())
       
-      # allp = []
       for perm in product(*pgl, repeat=1):
+      # for perm in combinations(pgl, len(pgl)):
          options = dict(zip(kl, perm))
-         # print(options)
-         # allp.append(options)
-         yield options
-      # return allp
+         yield options  
    
    def combinations(self, items=None):
       return list(self.expand(items=items))

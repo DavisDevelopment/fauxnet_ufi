@@ -72,6 +72,7 @@ class Backtester:
       self.transact('S', t, vol, today_close)
 
    def open_long(self, t):
+      #TODO refactor to support multiple stocks
       today_close = self.df.close.loc[t]
       
       if self.holdings > 0 or self.dollars == 0:
@@ -153,7 +154,7 @@ class Backtester:
       if self._batched_samples:
          bT, bX, by = self.samples
          
-         for i in range(len(bT)):
+         for i in range(min(len(bT), len(bX), len(by))-1):
             t, x, yt = bT[i], bX[i], by[i]
             yp = ypred[i]
             
@@ -169,6 +170,7 @@ class Backtester:
       """
       if self._batched_samples:
          times, bX, by = self.samples
+         # print(tuple(map(lambda x: (type(x).__qualname__, len(x)), (times, bX, by))))
          ypred = self.model(bX).detach().long()
          return ypred
       
@@ -182,14 +184,7 @@ class Backtester:
       self.right = 0
       self.wrong = 0
       
-      vypred = self.generate_signals()
-      
       for i, time, X, ytrue, ypred in self.loop():
-         # print(X.shape)
-         # ypred = self.model(X).detach().long()[0].item()
-         # print('ypred: ', ypred)
-         # print([type(x).__qualname__ for x in (time, X, ytrue, ypred)])
-         
          self.total += 1
          if (ytrue if isinstance(ytrue, int) else ytrue.item()) == ypred:
             self.right += 1
@@ -240,13 +235,14 @@ class Backtester:
       summary['roi'] = (summary.balance / bal_init)
       # print(summary)
       
-      pltd:pd.DataFrame = summary[['close', 'balance']]
-      pltd.plot(y=['close', 'balance'])
-      # print(pltd)
-      
-      if showfig:
-         plt.show(block=block)
-      if savefig is not None:
-         plt.savefig(savefig)
+      if plot:
+         pltd:pd.DataFrame = summary[['close', 'balance']]
+         pltd.plot(y=['close', 'balance'])
+         
+         if showfig:
+            plt.show(block=block)
+            
+         if savefig is not None:
+            plt.savefig(savefig)
          
       return summary

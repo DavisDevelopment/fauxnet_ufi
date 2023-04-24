@@ -1,3 +1,9 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
 from functools import partial
 from math import floor
 from random import sample
@@ -10,21 +16,45 @@ import torch
 from torch import Tensor, tensor, typename
 from faux.pgrid import ls
 
+
+# In[2]:
+
+
 from coretools import list_stonks, load_frame
+
+
+# In[3]:
+
 
 from nn.trees.binary_tree import TorchDecisionTreeRegressor, TorchDecisionTreeClassifier
 from nn.trees.random_forest import TorchRandomForestClassifier, TorchRandomForestRegressor
+
+
+# In[4]:
+
 
 from typing import *
 from fn import F, _
 from cytoolz import *
 
+
+# In[5]:
+
+
 from pandas import DataFrame, Series
 from tools import flatten_dict, hasmethod, unzip, maxby, Struct
+
+
+# In[6]:
+
 
 import gc
 from tqdm import tqdm
 import pickle 
+
+
+# In[7]:
+
 
 import sys, os
 P = os.path
@@ -33,67 +63,22 @@ from olbi import printing, configurePrinting
 import faux.backtesting.common as fauxbt_common
 from faux.backtesting.common import split_samples
 
+
+# In[8]:
+
+
 from tsai.models.ROCKET import RocketClassifier
 from tsai.models.MINIROCKET import MiniRocketClassifier, MiniRocketVotingClassifier
 
 
-def samples_for(symbol:str, seq_len:int, columns:List[str]):
-   df:DataFrame = load_frame(symbol, './sp100')
-   df['abs_volume'] = df['volume']
-   df['volume'] = df['volume'].pct_change()
-   df = df.iloc[1:]
-   df = df[columns]
-   df['tmrw_close'] = df['close'].shift(-1)
-   df = df.drop(columns=['low', 'high'])
-   df['SIG'] = (df['tmrw_close'] > df['close']).astype('int')
-   df = df.dropna()
-   lookback_periods = [*list(range(1, 7)), 14, 21, 30]
-   lbcs = []
-   for lookback in lookback_periods:
-      lb_change = df['close'].pct_change(periods=lookback)
-      lb_col = f'close_lb{lookback}'
-      lbcs += [lb_col]
-      
-      df[lb_col] = lb_change
-   df = df[['close', *lbcs, 'SIG']].dropna()
-   datacols = list(df.columns)
-   x_columns = ['close', *lbcs]
-   y_columns = ['SIG']
-   data:np.ndarray = df.to_numpy()
-   x = data[:, list(map(lambda c: datacols.index(c), x_columns))]
-   y = data[:, datacols.index(y_columns[0])]
-   return x, y
+# In[9]:
+
 
 samples_for2 = fauxbt_common.samples_for
 
-def aggregate_samples_for2(sources, analyze:Callable[[DataFrame], DataFrame], xcols=None, xcols_not=[], ycol='SIG', x_timesteps=1):
-   for src in sources:
-      tsi, X, y = samples_for2(src, analyze=analyze, xcols=xcols, xcols_not=xcols_not, ycol=ycol, x_timesteps=x_timesteps)
-      
 
-def fmt_samples(x:Tensor, y:Tensor) -> Tuple[Tensor, Tensor]:
-   print('x.shape = ', x.shape)
-   print('y.shape = ', y.shape)
-   
-   return x, y
+# In[10]:
 
-TupXY = Tuple[Tensor, Tensor, Tensor, Tensor]
-TupIXY = Tuple[List[pd.Timestamp], Tensor, Tensor, List[pd.Timestamp], Tensor, Tensor]
-def eq_sized(*els):
-   n = None
-   for el in els:
-      if n is None:
-         n = len(el)
-         continue
-      elif n != len(el):
-         return False
-   return True
-def ensure_eq_sized(*els):
-   assert eq_sized(*els), f'Inconsistent sizing: {list(map(len, els))}'
-   return els
-
-
-   
 
 def scale_dataframe(df:DataFrame, nq=500):
    from sklearn.preprocessing import QuantileTransformer
@@ -105,8 +90,10 @@ def scale_dataframe(df:DataFrame, nq=500):
       r[c] = sX[i]
    return r
 
-# from ta_experiments import PGrid, Symbol, mkAnalyzer, expandps, implode, lrange
-# if __name__ == '__main__':
+
+# In[11]:
+
+
 def test_indicator_config(symbol, indicators, config={}):
    from sklearn.metrics import accuracy_score
    
@@ -167,6 +154,10 @@ def test_indicator_config(symbol, indicators, config={}):
    
    return results.iloc[0]
 
+
+# In[12]:
+
+
 def test_minirocket(data=None, n_estimators=1):
    from tsai.models.MINIROCKET import MiniRocketClassifier, MiniRocketVotingClassifier
    # from tsai.models.MINIROCKET_
@@ -201,7 +192,10 @@ def test_minirocket(data=None, n_estimators=1):
       model=model
    )
 
-   
+
+# In[13]:
+
+
 def fittest(data=None, ctor=MiniRocketClassifier, **ctor_kw):
    # from tsai.models.MINIROCKET_
    from tsai.basics import get_UCR_data, timer
@@ -226,7 +220,6 @@ def fittest(data=None, ctor=MiniRocketClassifier, **ctor_kw):
    t = timer.stop()
    
    acc = model.score(X_valid, y_valid)
-
    print('\n'.join([
       f'valid accuracy  :  {acc:.3%}',
       f'time            :  {t}'
@@ -238,6 +231,10 @@ def fittest(data=None, ctor=MiniRocketClassifier, **ctor_kw):
       model=model
    )
 
+
+# In[14]:
+
+
 def wrapped_minirockets(self, X:Tensor):
    if hasmethod(self, 'predict'):
       model = self
@@ -245,7 +242,6 @@ def wrapped_minirockets(self, X:Tensor):
       model = self['model']
    else:
       raise ValueError('invalid self')
-
    if X.ndim == 2:
       X = X.unsqueeze(0)
    elif X.ndim == 3:
@@ -256,6 +252,10 @@ def wrapped_minirockets(self, X:Tensor):
    ypred = model.predict(X.numpy())
    
    return torch.from_numpy(ypred)      
+
+
+# In[15]:
+
 
 def dcpy(target, src, *keys):
    for k in keys:
@@ -284,6 +284,10 @@ def backtest_minirockets(symbol, ts_idx, test_X, test_y, model, n_eval_days=90):
    btres = backtest(symbol, wmodel, samples=(times, bX, by), pos_type='long')
    
    return btres
+
+
+# In[16]:
+
 
 def cfgOptStep(train_symbol, hyperparams, data_transform, model=None, val_split=0.25, n_eval_days=365, unlink=True, backtest=True):
    ts_idx, X, y = samples_for2(
@@ -319,7 +323,6 @@ def cfgOptStep(train_symbol, hyperparams, data_transform, model=None, val_split=
       start_time = time()
       btres = backtest_minirockets(train_symbol, ts_idx, test_X, test_y, model, n_eval_days=n_eval_days)
       # print(f'took {time() - start_time}secs to run backtest')
-
       dcpy(best, btres, 'roi', 'baseline_roi', 'vs_market', 'pl_ratio')
    
    return best
@@ -347,6 +350,10 @@ def evaluateConfigurationOn(symbols:List[str], params, transform, model=None, va
    print(res)
    return res
 
+
+# In[17]:
+
+
 def finetune_for(symbol:str, param_space, transforms, model_ctor=None, val_split=0.25, n_eval_days=365, n_winners=15):
    from tqdm import tqdm
    from faux.pgrid import PGrid
@@ -372,7 +379,6 @@ def finetune_for(symbol:str, param_space, transforms, model_ctor=None, val_split
    #* ensure that we know what type of model we'll be using
    if model_ctor is None:
       model_ctor = MiniRocketClassifier
-
    #* create progress bar, so we'll know where we're at
    pbar = tqdm(total=len(transforms) * len(param_space))
    
@@ -393,11 +399,14 @@ def finetune_for(symbol:str, param_space, transforms, model_ctor=None, val_split
          res['transform'] = transform
          
          attempts.append(res)
-
    winners = list(topk(n_winners, attempts, _['vs_market']))
    # print(winners[0])
    
    return winners
+
+
+# In[18]:
+
 
 def main():   
    from faux.pgrid import PGrid
@@ -459,7 +468,6 @@ def main():
       
       # idll = [ito]
       hpdl = list(hpg.expand())
-
       train_symbols = [
          'NOC',
          'PAYC', 'ETSY',
@@ -502,7 +510,6 @@ def main():
    #TODO now, take the best configuration and fit MINIROCKET on an aggregate dataset
    #TODO ...then, evaluate that on a comprehensive list of symbols, and document performance statistics
    #TODO ...on each symbol individually and en aggregate
-
    winning_analyzer = Indicators(*winner.indicators)
    winning_params   = winner.hyperparams
    
@@ -583,14 +590,12 @@ def main():
    
    _X = np.concatenate([x for x,_ in data_buffer])
    _y = np.concatenate([y for _,y in data_buffer])
-
    Nt = 12000
    train_X, train_y, test_X, test_y = split_samples(X=trunc(Nt, _X), y=trunc(Nt, _y), shuffle=True, pct=0.05)
    
    print(f'training MINIROCKET on {len(train_X)} samples..')
    res = test_minirocket(data=(train_X, train_y, test_X, test_y), n_estimators=1)
    pickle.dump(res, open('.res.pickle', 'wb+'))
-
    model = res['model']
    wmdl = partial(wrapped_minirockets, model)
    
@@ -654,10 +659,19 @@ def get_config_space():
    
    feature_specs = [x for x in map(lambda d: Indicators(*d.items()), ibcl)]
    random.shuffle(feature_specs)
-
    param_specs = list(hpg.expand())
    
    return param_specs, feature_specs[:18]
+
+
+# In[ ]:
+
+
+
+
+
+# In[20]:
+
 
 def polyfinetune():
    from faux.features.ta.loadout import Indicators
@@ -706,16 +720,14 @@ def polyfinetune():
          try:
             print(f'TUNING OPTIMA for {symbol}')
             sym_results = finetune_for(symbol, pspecs, fspecs, val_split=0.05, n_eval_days=365)
-
             optima[symbol] = (sym_results[0]['hyperparams'], sym_results[0]['indicators'])
-            #TODO do not store optima when none of the results beat the stock itself (vs_market < 1.0)
          
          except Exception as error:
             optima[symbol] = None
             failures[symbol] = error
             continue
          
-         # break
+         break
       
       pickle.dump(optima, open(pofn, 'wb+'))
       pprint(failures)
@@ -749,34 +761,21 @@ def polyfinetune():
    #* load models
    model_entries = models
    pprint(model_entries)
-   models, params, transforms = ({}, {}, {})
-   for sym in symbols:
-      e = model_entries[sym]
-      print(e)
-      if e is None: continue
-      elif isinstance(e, dict):
-         attrs = tuple(e.keys())
-         print(attrs)
-         assert 'model' in e
-         assert 'hyperparameters' in e
-         assert 'indicators' in e
-         models[sym] = e['model']
-         params[sym] = e['hyperparameters']
-         transforms[sym] = e['indicators']
-         
-   # models = {sym:model_entries[sym]['model'] for sym in symbols}
-   params = [params[sym] for sym in symbols]
-   transforms = [model_entries[sym]['indicators'] for sym in symbols]
    
-   models = [partial(wrapped_minirockets, models[sym]) for sym in symbols]
+   models = {sym:(model_entries[sym]['model']) for sym in symbols if (sym in model_entries and model_entries[sym] is not None)}
+   params = [model_entries[sym] for sym in symbols if (sym in model_entries and model_entries[sym] is not None)]
+   params = [p.get('hyperparameters', None) for p in params]
+   transforms = [model_entries[sym]['indicators'] for sym in symbols if (sym in model_entries)]
+   transforms = list(map(lambda t: Indicators(*t) if isiterable(t) else t, transforms))
    
    from faux.backtesting.multibacktester import PolySymBacktester, backtest
    
-   hist = final_backtest_summary = backtest(symbols, params=params, transforms=transforms, model=models, date_begin='2022-01-01')
-   print(hist)
+   print(transforms)
+   backtest(symbols, params=params, transforms=transforms, model=models, date_begin='2022-01-01')
                   
    return models
    
 if __name__ == '__main__':
    # main()
    polyfinetune()
+

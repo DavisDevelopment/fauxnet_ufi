@@ -147,7 +147,10 @@ import numpy as np
 import sys, os
 
 class Struct:
-   def __init__(self, **entries):
+   def __init__(self, *args, **entries):
+      if len(entries) == 0 and len(args) == 1 and isiterable(args[0]):
+         print(args)
+         # entries = dict(args[0])
       self.__dict__.update(entries)
       
    def __getitem__(self, name): 
@@ -483,10 +486,13 @@ def unzip(seq):
 
    return tuple(starmap(pluck, enumerate(seqs)))
 
-def gets(d, *items):
+def gets(d, *items, asitems=False):
    if len(items) == 0:
       items = list(d.keys())
-   return tuple(d.get(k, None) for k in items)
+   if asitems:
+      return tuple((k, d.get(k, None)) for k in items)
+   else:
+      return tuple(d.get(k, None) for k in items)
 
 def getsmatching(d, pattern='*', regexp=False):
    import fnmatch, regex

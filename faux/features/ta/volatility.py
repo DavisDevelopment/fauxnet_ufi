@@ -68,3 +68,5 @@ def delta_vwap(_super, high, low, close, volume, anchor=None, offset=None):
    rel_res.name = f'delta_{abs_res.name}'
    
    return rel_res
+
+# ta.vol

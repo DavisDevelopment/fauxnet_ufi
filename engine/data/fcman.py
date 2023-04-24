@@ -78,15 +78,6 @@ def convert_df(df: pd.DataFrame)->Dict[pd.Timestamp, ndarray]:
       out[ts] = y
    return frozendict(out)
 
-def thePeeAndPoop(date, d):
-   if isinstance(d, (dict, frozendict)):
-      return d.get(date, None)
-   
-   if date in d.index:
-      return d.loc[date].values
-   else:
-      return None
-
 from numba import jit, prange, vectorize
          
 @jit(cache=True)

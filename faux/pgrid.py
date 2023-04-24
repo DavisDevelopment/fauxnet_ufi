@@ -1,7 +1,7 @@
 
 from random import shuffle
 from tools import isiterable
-from itertools import product
+from itertools import combinations, product
 # from tools import closure, dotget, dotgets, before, after, gets, isiterable, once
 from numpy import typename
 from cytoolz import juxt
@@ -71,8 +71,12 @@ class PGrid:
          # print(a)
          g.append(ls(a, shuffled=shuffled))
       
-      all_poss = ls(product(*g), shuffled=shuffled)
-      all_poss = list(map(lambda x: dict(zip(k, x)), all_poss))
+      #TODO: use combinations instead of product
+      all_poss_a = ls(product(*g), shuffled=shuffled)
+      # print(all_poss_a)
+      all_poss_b = ls(combinations(g, len(g)), shuffled=shuffled)
+      # print(all_poss_b)
+      all_poss = list(map(lambda x: dict(zip(k, x)), all_poss_a))
       return all_poss
    
    def add(self, name=None, values:Any=None, parameters=None):

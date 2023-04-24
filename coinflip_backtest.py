@@ -212,7 +212,7 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
    baseline_roi = blogs.baseline_roi.iloc[-1]
    bals:pd.Series = blogs.balance
    bal_final = bals.iloc[-1]
-   rois = bals.diff().iloc[1:]
+   rois:pd.Series = bals.diff().iloc[1:]
    
    P = rois[rois > 0].mean()
    L = rois[rois < 0].abs().mean()
@@ -220,8 +220,10 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
    final_roi = (bal_final / bal_init)
    
    vs_market = float(round(final_roi/baseline_roi, 3))
+   #TODO: compute maximum possible ROI, and return an additional 'vs_abs_optimum' variable
    
-   print('Trading vs Holding' + colored(f'({ticker})', 'cyan') + ': ', vs_market)
+   duration = (rois.index[-1] - rois.index[0])
+   print('Trading vs Holding' + colored(f'({ticker}, {duration})', 'cyan') + ': ', vs_market)
    
    score = (final_roi - baseline_roi) / final_roi * 100.0
    
@@ -242,4 +244,5 @@ def backtest(stock:Union[str, pd.DataFrame]='AAPL', model=None, pos_type='long',
       score=score,
       did_beat_market=did_beat_market,
       did_place_orders=did_place_orders,
+      vs_market=vs_market,
    )

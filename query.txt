@@ -1,0 +1,15 @@
+Write me a function to parse json files (in the format exemplified in { config.json }) as described below.
+Recursively, visiting every value in the document, 
+and tracking the "path" (from root to what we're parsing currently) as an argument to `_parse_json`,
+apply transforms: (string patterns should always be checked via regular expression)
+ (a) strings containing substrings matching r"$\{([\w_][\w\d_\.]*)\}" are references to variables 
+     to be interpolated into the string from a `variables` argument; perform interpolation. When group 1 of the match contains one or more '.', it is a dot-path
+ (b) any string containing only the '?' character should be replaced with the result of calling `input` with the flattened dot-path to the string
+ (c) any string which begins and ends with '`' should be replaced with the result of evaluating the string between the backticks
+     as Python code, with `globals=dicttoolz.merge(functions, variables)`
+
+values in `data.features` are to be interpreted in the following manner:
+ - ...beep boop beep boo
+ - objects containing only one property, whose value is an object as well...
+   - when property key begins and ends with backticks, interpret as python code 
+   - otherwise, property key shall be treated as an identifier for the analysis function to apply, so replace it with a lambda which returns the resolved function the identifier references
